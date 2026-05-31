@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Punctum Font Specimens</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=EB+Garamond:wght@400;500;600&family=Libre+Baskerville:wght@400;700&family=Noto+Serif+SC:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #050505;
+      --paper: #0b0a08;
+      --bone: #f1ece2;
+      --muted: #b5aa99;
+      --gold: #c6a15a;
+      --card: #17130f;
+      --invite: #e7decd;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--ink);
+      color: var(--bone);
+      font-family: "Noto Serif SC", Songti SC, serif;
+    }
+
+    .page {
+      width: 1600px;
+      min-height: 2100px;
+      padding: 72px 84px;
+      background:
+        radial-gradient(circle at 84% 4%, rgba(198, 161, 90, .12), transparent 22%),
+        var(--ink);
+    }
+
+    .eyebrow {
+      margin-bottom: 18px;
+      color: var(--gold);
+      font: 18px/1.2 "Cormorant Garamond", serif;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0 0 18px;
+      font: 600 70px/1.02 "Cormorant Garamond", "Noto Serif SC", serif;
+      letter-spacing: .01em;
+    }
+
+    .intro {
+      width: 920px;
+      margin: 0 0 60px;
+      color: var(--muted);
+      font: 24px/1.75 "Noto Serif SC", serif;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 34px;
+    }
+
+    .spec {
+      min-height: 426px;
+      padding: 34px;
+      border: 1px solid #292520;
+      background: linear-gradient(145deg, #100e0c, #070707);
+    }
+
+    .spec.recommended {
+      border-color: rgba(198, 161, 90, .68);
+      box-shadow: 0 0 0 1px rgba(198, 161, 90, .22) inset;
+    }
+
+    .name {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 28px;
+      color: var(--gold);
+      font-size: 18px;
+      letter-spacing: .08em;
+    }
+
+    .tag {
+      color: #8d8374;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .title {
+      margin-bottom: 16px;
+      font-size: 54px;
+      line-height: 1;
+      letter-spacing: .01em;
+    }
+
+    .subtitle {
+      margin-bottom: 26px;
+      color: var(--muted);
+      font-size: 24px;
+      line-height: 1.45;
+    }
+
+    .body {
+      color: #d7cec0;
+      font-size: 20px;
+      line-height: 1.72;
+    }
+
+    .exif {
+      margin-top: 24px;
+      padding-top: 18px;
+      border-top: 1px solid #302a23;
+      color: #aaa092;
+      font-size: 18px;
+      line-height: 1.75;
+    }
+
+    .invite-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+      margin-top: 48px;
+    }
+
+    .invite {
+      height: 420px;
+      padding: 24px;
+      background: var(--invite);
+      color: #19120d;
+    }
+
+    .photo {
+      height: 142px;
+      margin-bottom: 28px;
+      background:
+        radial-gradient(circle at 72% 24%, rgba(246, 236, 203, .34), transparent 28%),
+        linear-gradient(135deg, #1c1612, #8c6b47 48%, #d3bd9c);
+    }
+
+    .invite h2 {
+      margin: 0 0 18px;
+      font-size: 34px;
+      line-height: 1;
+      font-weight: 500;
+    }
+
+    .invite p {
+      margin: 0;
+      color: #605344;
+      font-size: 18px;
+      line-height: 1.6;
+    }
+
+    .a { font-family: "Noto Serif SC", "Cormorant Garamond", serif; }
+    .a .latin, .a .title { font-family: "Cormorant Garamond", "Noto Serif SC", serif; }
+
+    .b { font-family: "Noto Serif SC", "Libre Baskerville", serif; }
+    .b .latin, .b .title { font-family: "Libre Baskerville", "Noto Serif SC", serif; }
+
+    .c { font-family: "Noto Serif SC", "Playfair Display", serif; }
+    .c .latin, .c .title { font-family: "Playfair Display", "Noto Serif SC", serif; }
+
+    .d { font-family: "Noto Serif SC", "EB Garamond", serif; }
+    .d .latin, .d .title { font-family: "EB Garamond", "Noto Serif SC", serif; }
+
+    .e { font-family: Songti SC, "Noto Serif SC", serif; }
+    .e .latin, .e .title { font-family: Baskerville, Songti SC, serif; }
+
+    .f { font-family: "Noto Serif SC", "PT Serif", serif; }
+    .f .latin, .f .title { font-family: "PT Serif", "Noto Serif SC", serif; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="eyebrow">Punctum Typeface Direction</div>
+    <h1>Classic Serif Test / 经典衬线字体样张</h1>
+    <p class="intro">同一组真实界面文案，用不同中英文字体组合呈现。重点看：标题的摄影画册感、中文的高级感、EXIF 信息的可读性，以及画展邀请卡上的气质。</p>
+
+    <div class="grid">
+      <section class="spec recommended a">
+        <div class="name"><span>方案 A：Noto Serif SC + Cormorant Garamond</span><span class="tag">推荐</span></div>
+        <div class="title">Your Punctums</div>
+        <div class="subtitle">一张张画廊邀请卡，是你来时的路</div>
+        <div class="body">River Studies<br>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</div>
+        <div class="exif latin">No.23 · 1/250s · ISO 200 · f/2.8 · OPPO Find X9 Ultra</div>
+      </section>
+
+      <section class="spec b">
+        <div class="name"><span>方案 B：Noto Serif SC + Libre Baskerville</span><span class="tag">稳重</span></div>
+        <div class="title">Your Punctums</div>
+        <div class="subtitle">一张张画廊邀请卡，是你来时的路</div>
+        <div class="body">River Studies<br>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</div>
+        <div class="exif latin">No.23 · 1/250s · ISO 200 · f/2.8 · OPPO Find X9 Ultra</div>
+      </section>
+
+      <section class="spec c">
+        <div class="name"><span>方案 C：Noto Serif SC + Playfair Display</span><span class="tag">杂志</span></div>
+        <div class="title">Your Punctums</div>
+        <div class="subtitle">一张张画廊邀请卡，是你来时的路</div>
+        <div class="body">River Studies<br>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</div>
+        <div class="exif latin">No.23 · 1/250s · ISO 200 · f/2.8 · OPPO Find X9 Ultra</div>
+      </section>
+
+      <section class="spec d">
+        <div class="name"><span>方案 D：Noto Serif SC + EB Garamond</span><span class="tag">文艺</span></div>
+        <div class="title">Your Punctums</div>
+        <div class="subtitle">一张张画廊邀请卡，是你来时的路</div>
+        <div class="body">River Studies<br>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</div>
+        <div class="exif latin">No.23 · 1/250s · ISO 200 · f/2.8 · OPPO Find X9 Ultra</div>
+      </section>
+
+      <section class="spec e">
+        <div class="name"><span>方案 E：Songti SC + Baskerville</span><span class="tag">系统字体</span></div>
+        <div class="title">Your Punctums</div>
+        <div class="subtitle">一张张画廊邀请卡，是你来时的路</div>
+        <div class="body">River Studies<br>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</div>
+        <div class="exif latin">No.23 · 1/250s · ISO 200 · f/2.8 · OPPO Find X9 Ultra</div>
+      </section>
+
+      <section class="spec f">
+        <div class="name"><span>方案 F：Noto Serif SC + PT Serif</span><span class="tag">克制</span></div>
+        <div class="title">Your Punctums</div>
+        <div class="subtitle">一张张画廊邀请卡，是你来时的路</div>
+        <div class="body">River Studies<br>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</div>
+        <div class="exif latin">No.23 · 1/250s · ISO 200 · f/2.8 · OPPO Find X9 Ultra</div>
+      </section>
+    </div>
+
+    <div class="invite-row">
+      <div class="invite a">
+        <div class="photo"></div>
+        <h2 class="latin">River Studies</h2>
+        <p>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</p>
+      </div>
+      <div class="invite b">
+        <div class="photo"></div>
+        <h2 class="latin">River Studies</h2>
+        <p>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</p>
+      </div>
+      <div class="invite c">
+        <div class="photo"></div>
+        <h2 class="latin">River Studies</h2>
+        <p>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</p>
+      </div>
+      <div class="invite d">
+        <div class="photo"></div>
+        <h2 class="latin">River Studies</h2>
+        <p>2025年1月 - 2026年4月<br>关于 128 幅作品的故事</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

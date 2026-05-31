@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      注意：本应用刻意不声明任何相册/存储权限。
+      照片读取完全通过 SAF（ACTION_OPEN_DOCUMENT_TREE）由用户主动授权文件夹完成，
+      EXIF（含 GPS）来自用户授权的原始文件字节，无需 READ_MEDIA_IMAGES / ACCESS_MEDIA_LOCATION。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:name=".PunctumApplication"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Punctum">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Punctum">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
