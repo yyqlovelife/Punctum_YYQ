@@ -61,8 +61,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import java.io.File
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.model.InvitationCardStyle
@@ -262,6 +262,7 @@ private fun PostcardInvitationCard(
     ) {
         CoverCollage(
             uris = overview.coverUris,
+            coverPath = overview.postcardCoverPath,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f),
@@ -375,6 +376,7 @@ private fun TicketInvitationCard(
 
         TicketImageStrip(
             uris = overview.coverUris,
+            coverPath = overview.ticketCoverPath,
             modifier = Modifier
                 .width(imageWidth)
                 .fillMaxHeight()
@@ -481,33 +483,68 @@ private fun SortDialog(
 }
 
 @Composable
-private fun CoverCollage(uris: List<Uri>, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier.background(Color(0xFF15110E)).padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+private fun CoverCollage(uris: List<Uri>, coverPath: String?, modifier: Modifier = Modifier) {
+    val cachedCover = remember(coverPath) { coverPath?.let { File(it) }?.takeIf { it.exists() } }
+    if (cachedCover != null) {
+        Box(modifier = modifier.background(Color(0xFF15110E)).padding(12.dp)) {
+            val context = LocalContext.current
+            val imageModel = remember(cachedCover) {
+                ImageRequest.Builder(context)
+                    .data(cachedCover)
+                    .memoryCacheKey("invite-postcard-file:${cachedCover.absolutePath}")
+                    .diskCacheKey("invite-postcard-file:${cachedCover.absolutePath}")
+                    .crossfade(false)
+                    .build()
+            }
+            PunctumImage(
+                model = imageModel,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    } else if (uris.size < 4) {
+        CollageImage(
+            uri = uris.firstOrNull(),
+            modifier = modifier.background(Color(0xFF15110E)).padding(12.dp).fillMaxSize(),
+        )
+    } else {
         Column(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
+            modifier = modifier.background(Color(0xFF15110E)).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CollageImage(uri = uris.getOrNull(0), modifier = Modifier.fillMaxWidth().weight(1f))
-            CollageImage(uri = uris.getOrNull(1), modifier = Modifier.fillMaxWidth().weight(1.45f))
+            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CollageImage(uri = uris.getOrNull(0), modifier = Modifier.weight(1f).fillMaxHeight())
+                CollageImage(uri = uris.getOrNull(1), modifier = Modifier.weight(1f).fillMaxHeight())
+            }
+            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CollageImage(uri = uris.getOrNull(2), modifier = Modifier.weight(1f).fillMaxHeight())
+                CollageImage(uri = uris.getOrNull(3), modifier = Modifier.weight(1f).fillMaxHeight())
+            }
         }
-        CollageImage(
-            uri = uris.getOrNull(2),
-            modifier = Modifier.weight(1.18f).fillMaxHeight(),
-        )
     }
 }
 
 @Composable
-private fun TicketImageStrip(uris: List<Uri>, modifier: Modifier = Modifier) {
+private fun TicketImageStrip(uris: List<Uri>, coverPath: String?, modifier: Modifier = Modifier) {
     Box(modifier = modifier.background(Surface1)) {
+        val cachedCover = remember(coverPath) { coverPath?.let { File(it) }?.takeIf { it.exists() } }
         val uri = uris.firstOrNull()
-        if (uri != null) {
+        if (cachedCover != null || uri != null) {
             val context = LocalContext.current
-            val imageModel = remember(uri) { inviteCoverRequest(context, uri) }
-            AsyncImage(
+            val imageModel = remember(cachedCover, uri) {
+                if (cachedCover != null) {
+                    ImageRequest.Builder(context)
+                        .data(cachedCover)
+                        .memoryCacheKey("invite-ticket-file:${cachedCover.absolutePath}")
+                        .diskCacheKey("invite-ticket-file:${cachedCover.absolutePath}")
+                        .crossfade(false)
+                        .build()
+                } else {
+                    inviteCoverRequest(context, uri!!)
+                }
+            }
+            PunctumImage(
                 model = imageModel,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
@@ -523,7 +560,7 @@ private fun CollageImage(uri: Uri?, modifier: Modifier) {
         if (uri != null) {
             val context = LocalContext.current
             val imageModel = remember(uri) { inviteCoverRequest(context, uri) }
-            AsyncImage(
+            PunctumImage(
                 model = imageModel,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,

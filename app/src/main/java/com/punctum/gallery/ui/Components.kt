@@ -1,5 +1,7 @@
 package com.punctum.gallery.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,10 +14,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.punctum.gallery.ui.theme.Bone
 import com.punctum.gallery.ui.theme.Gold
 import com.punctum.gallery.ui.theme.Hairline
@@ -61,4 +70,40 @@ internal fun ExifField(label: String, value: String?) {
             modifier = Modifier.weight(1f),
         )
     }
+}
+
+@Composable
+internal fun PunctumImage(
+    model: Any?,
+    contentDescription: String?,
+    contentScale: ContentScale,
+    modifier: Modifier = Modifier,
+    animateOnLoad: Boolean = true,
+    onSuccess: () -> Unit = {},
+) {
+    var loaded by remember(model, animateOnLoad) { mutableStateOf(!animateOnLoad) }
+    val alpha by animateFloatAsState(
+        targetValue = if (loaded) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "image-alpha",
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (loaded) 1f else 1.018f,
+        animationSpec = tween(durationMillis = 240),
+        label = "image-scale",
+    )
+    AsyncImage(
+        model = model,
+        contentDescription = contentDescription,
+        contentScale = contentScale,
+        onSuccess = {
+            loaded = true
+            onSuccess()
+        },
+        modifier = modifier.graphicsLayer {
+            this.alpha = alpha
+            scaleX = scale
+            scaleY = scale
+        },
+    )
 }

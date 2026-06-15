@@ -8,5 +8,7 @@ data class GalleryOverview(
     val count: Int = 0,
     val timeSpan: String = "",
     val coverUris: List<Uri> = emptyList(),
+    val postcardCoverPath: String? = null,
+    val ticketCoverPath: String? = null,
     val loading: Boolean = true,
 )

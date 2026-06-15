@@ -12,12 +12,17 @@ data class Photo(
     val takenMillis: Long = 0L,
     val dateTaken: String? = null,
     val latLong: DoubleArray? = null,
+    val gpsReadAttempted: Boolean = false,
     val shutter: String? = null,
     val iso: String? = null,
     val aperture: String? = null,
     val focalLength: String? = null,
     val device: String? = null,
     val lens: String? = null,
+    val fileSizeBytes: Long = 0L,
+    val modifiedMillis: Long = 0L,
+    val thumbnailPath: String? = null,
+    val metadataVersion: Int = 0,
 ) {
     /** 显示用宽高比（已按 EXIF 方向校正）。无法读取时回退为 1。 */
     val aspectRatio: Float
@@ -25,6 +30,21 @@ data class Photo(
 
     val coordinateText: String?
         get() = latLong?.let { String.format(Locale.US, "%.5f, %.5f", it[0], it[1]) }
+
+    val resolutionText: String?
+        get() = if (width > 0 && height > 0) "$width × $height" else null
+
+    val fileSizeText: String?
+        get() = when {
+            fileSizeBytes <= 0L -> null
+            fileSizeBytes >= 1024L * 1024L * 1024L ->
+                String.format(Locale.US, "%.2f GB", fileSizeBytes / (1024.0 * 1024.0 * 1024.0))
+            fileSizeBytes >= 1024L * 1024L ->
+                String.format(Locale.US, "%.1f MB", fileSizeBytes / (1024.0 * 1024.0))
+            fileSizeBytes >= 1024L ->
+                String.format(Locale.US, "%.0f KB", fileSizeBytes / 1024.0)
+            else -> "$fileSizeBytes B"
+        }
 
     override fun equals(other: Any?): Boolean = other is Photo && other.uri == uri
     override fun hashCode(): Int = uri.hashCode()

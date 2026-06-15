@@ -28,6 +28,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -36,8 +37,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import java.io.File
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.model.GalleryStyle
@@ -47,9 +48,16 @@ import com.punctum.gallery.ui.theme.Gold
 import com.punctum.gallery.ui.theme.Muted
 import com.punctum.gallery.ui.theme.Surface1
 import com.punctum.gallery.ui.theme.galleryTitleFont
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.FlowPreview
 
 @Composable
+@OptIn(FlowPreview::class)
 internal fun GalleryScreen(
     gallery: Gallery,
     photos: List<Photo>,
@@ -59,8 +67,27 @@ internal fun GalleryScreen(
     onOpenSwitcher: () -> Unit,
     onRename: (Gallery) -> Unit,
     onSelectPhoto: (Int) -> Unit,
+    onWarmThumbnails: (Int, Int) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    LaunchedEffect(photos, listState) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index } }
+            .map { visible ->
+                if (visible.isEmpty() || photos.isEmpty()) null
+                else {
+                    val firstRow = (visible.minOrNull() ?: 1) - 1
+                    val lastRow = (visible.maxOrNull() ?: 1) - 1
+                    val firstPhoto = (firstRow.coerceAtLeast(0)) * 2
+                    val lastPhoto = ((lastRow.coerceAtLeast(0)) * 2 + 1).coerceAtMost(photos.lastIndex)
+                    firstPhoto to lastPhoto
+                }
+            }
+            .distinctUntilChanged()
+            .debounce(100)
+            .collectLatest { range ->
+                range?.let { onWarmThumbnails(it.first, it.second) }
+            }
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -127,9 +154,9 @@ private fun OriginalRatioRow(
     Row(modifier = Modifier.fillMaxWidth()) {
         row.forEachIndexed { offset, photo ->
             val aspect = photo.aspectRatio.coerceIn(0.45f, 2.4f)
-            val imageModel = remember(photo.uri) {
+            val imageModel = remember(photo.uri, photo.thumbnailPath) {
                 ImageRequest.Builder(context)
-                    .data(photo.uri)
+                    .data(photo.thumbnailPath?.let { File(it) }?.takeIf { it.exists() } ?: photo.uri)
                     .memoryCacheKey("gallery-thumb:${photo.uri}")
                     .diskCacheKey("gallery-thumb:${photo.uri}")
                     .size(900)
@@ -143,10 +170,11 @@ private fun OriginalRatioRow(
                     .background(Surface1)
                     .clickable { onSelectPhoto(rowStartIndex + offset) },
             ) {
-                AsyncImage(
+                PunctumImage(
                     model = imageModel,
                     contentDescription = photo.name,
                     contentScale = ContentScale.Crop,
+                    animateOnLoad = false,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

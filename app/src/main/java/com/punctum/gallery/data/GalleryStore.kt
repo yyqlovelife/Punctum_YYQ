@@ -62,6 +62,8 @@ class GalleryStore(context: Context) {
                             coverUris = (0 until covers.length()).mapNotNull { i ->
                                 covers.optString(i).takeIf { it.isNotBlank() }?.let(Uri::parse)
                             },
+                            postcardCoverPath = cached.optString("postcardCoverPath").ifBlank { null },
+                            ticketCoverPath = cached.optString("ticketCoverPath").ifBlank { null },
                             loading = false,
                         )
                     )
@@ -87,6 +89,8 @@ class GalleryStore(context: Context) {
                 put("count", overview.count)
                 put("timeSpan", overview.timeSpan)
                 put("covers", covers)
+                put("postcardCoverPath", overview.postcardCoverPath)
+                put("ticketCoverPath", overview.ticketCoverPath)
             }
         )
         prefs.edit().putString(KEY_OVERVIEWS, root.toString()).apply()
@@ -121,12 +125,17 @@ class GalleryStore(context: Context) {
                 takenMillis = obj.optLong("takenMillis", 0L),
                 dateTaken = obj.optString("dateTaken").ifBlank { null },
                 latLong = if (lat != null && lon != null) doubleArrayOf(lat, lon) else null,
+                gpsReadAttempted = obj.optBoolean("gpsReadAttempted", false),
                 shutter = obj.optString("shutter").ifBlank { null },
                 iso = obj.optString("iso").ifBlank { null },
                 aperture = obj.optString("aperture").ifBlank { null },
                 focalLength = obj.optString("focalLength").ifBlank { null },
                 device = obj.optString("device").ifBlank { null },
                 lens = obj.optString("lens").ifBlank { null },
+                fileSizeBytes = obj.optLong("fileSizeBytes", 0L),
+                modifiedMillis = obj.optLong("modifiedMillis", 0L),
+                thumbnailPath = obj.optString("thumbnailPath").ifBlank { null },
+                metadataVersion = obj.optInt("metadataVersion", 0),
             )
         }
     }
@@ -150,12 +159,17 @@ class GalleryStore(context: Context) {
                     put("lat", it[0])
                     put("lon", it[1])
                 }
+                put("gpsReadAttempted", p.gpsReadAttempted)
                 put("shutter", p.shutter)
                 put("iso", p.iso)
                 put("aperture", p.aperture)
                 put("focalLength", p.focalLength)
                 put("device", p.device)
                 put("lens", p.lens)
+                put("fileSizeBytes", p.fileSizeBytes)
+                put("modifiedMillis", p.modifiedMillis)
+                put("thumbnailPath", p.thumbnailPath)
+                put("metadataVersion", p.metadataVersion)
             })
         }
         root.put(uriKey, arr)

@@ -1,11 +1,19 @@
 package com.punctum.gallery
 
 import android.os.Bundle
+import android.Manifest
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.database.ContentObserver
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.IntentSenderRequest
+import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -27,6 +35,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -36,7 +45,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.ui.DetailScreen
@@ -60,8 +73,78 @@ class MainActivity : ComponentActivity() {
                 val picker = rememberLauncherForActivityResult(
                     ActivityResultContracts.OpenDocumentTree()
                 ) { uri -> uri?.let { vm.addGallery(it) } }
+                val mediaPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestMultiplePermissions()
+                ) { vm.refreshCurrentData() }
+                val deleteConfirmationLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartIntentSenderForResult()
+                ) { result ->
+                    vm.onDeleteConfirmationHandled(result.resultCode == Activity.RESULT_OK)
+                }
 
-                LaunchedEffect(Unit) { vm.start() }
+                LaunchedEffect(Unit) {
+                    vm.start()
+                    vm.startForegroundSync()
+                    val hasImagePermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                        ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            Manifest.permission.READ_MEDIA_IMAGES,
+                        ) == PackageManager.PERMISSION_GRANTED
+                    val hasLocationPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                        ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            Manifest.permission.ACCESS_MEDIA_LOCATION,
+                        ) == PackageManager.PERMISSION_GRANTED
+                    val permissions = buildList {
+                        if (!hasImagePermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            add(Manifest.permission.READ_MEDIA_IMAGES)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+                            }
+                        }
+                        if (!hasLocationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            add(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                        }
+                    }
+                    if (permissions.isNotEmpty()) {
+                        mediaPermissionLauncher.launch(permissions.toTypedArray())
+                    }
+                }
+                DisposableEffect(vm) {
+                    val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+                        override fun onChange(selfChange: Boolean) {
+                            vm.refreshCurrentData()
+                        }
+                    }
+                    contentResolver.registerContentObserver(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        true,
+                        observer,
+                    )
+                    onDispose { contentResolver.unregisterContentObserver(observer) }
+                }
+                DisposableEffect(vm) {
+                    val lifecycleObserver = LifecycleEventObserver { _, event ->
+                        when (event) {
+                            Lifecycle.Event.ON_RESUME -> vm.startForegroundSync()
+                            Lifecycle.Event.ON_PAUSE -> vm.stopForegroundSync()
+                            else -> Unit
+                        }
+                    }
+                    lifecycle.addObserver(lifecycleObserver)
+                    onDispose {
+                        vm.stopForegroundSync()
+                        lifecycle.removeObserver(lifecycleObserver)
+                    }
+                }
+                val pendingDeleteConfirmation = vm.pendingDeleteConfirmation
+                LaunchedEffect(pendingDeleteConfirmation) {
+                    pendingDeleteConfirmation?.let { pending ->
+                        deleteConfirmationLauncher.launch(
+                            IntentSenderRequest.Builder(pending.intentSender).build()
+                        )
+                    }
+                }
 
                 PunctumApp(vm = vm, onPickFolder = { picker.launch(null) })
             }
@@ -122,6 +205,7 @@ private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
                         onOpenSwitcher = vm::openSwitcher,
                         onRename = { renameTarget = it },
                         onSelectPhoto = vm::openDetail,
+                        onWarmThumbnails = vm::warmGalleryThumbnails,
                     )
                 }
             }
@@ -164,6 +248,7 @@ private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
                 startIndex = detailIndex ?: 0,
                 onDelete = vm::deletePhoto,
                 onClose = vm::closeDetail,
+                onWarmImages = vm::warmDetailImages,
             )
         }
     }
