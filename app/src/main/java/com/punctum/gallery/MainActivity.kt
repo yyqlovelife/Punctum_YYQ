@@ -15,12 +15,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.IntentSenderRequest
 import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
@@ -43,6 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.content.ContextCompat
@@ -155,57 +152,66 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
     var renameTarget by remember { mutableStateOf<Gallery?>(null) }
+    var readyGalleryKey by remember { mutableStateOf<String?>(null) }
     val postcardListState = rememberLazyListState()
     val ticketListState = rememberLazyListState()
 
     Box(modifier = Modifier.fillMaxSize().background(Ink)) {
         val current = vm.currentGallery
-        AnimatedContent(
-            targetState = current?.uri?.toString(),
-            transitionSpec = {
-                (fadeIn() + scaleIn(initialScale = 0.94f)) togetherWith
-                    (fadeOut() + scaleOut(targetScale = 1.04f))
-            },
-            label = "home-gallery",
-        ) { currentKey ->
-            val visibleGallery = vm.galleries.firstOrNull { it.uri.toString() == currentKey }
-            if (visibleGallery == null) {
-                if (vm.galleries.isEmpty()) {
-                    EmptyScreen(onPickFolder = onPickFolder)
-                } else {
-                    val ordered = vm.galleries.map { g ->
-                        vm.overviews[g.uri.toString()] ?: com.punctum.gallery.model.GalleryOverview(g, loading = true)
-                    }
-                    SwitcherScreen(
-                        overviews = ordered,
-                        canClose = false,
-                        title = "Your Punctums",
-                        subtitle = vm.homeSubtitle,
-                        invitationStyle = vm.invitationStyle,
-                        postcardListState = postcardListState,
-                        ticketListState = ticketListState,
-                        onSelect = vm::selectGallery,
-                        onAdd = onPickFolder,
-                        onToggleInvitationStyle = vm::toggleInvitationStyle,
-                        onRename = { renameTarget = it },
-                        onMove = vm::moveGallery,
-                        onDelete = vm::removeGallery,
-                        onClose = vm::closeSwitcher,
-                    )
-                }
-            } else {
-                key(visibleGallery.uri.toString()) {
+        val currentKey = current?.uri?.toString()
+        LaunchedEffect(currentKey) {
+            if (currentKey == null) readyGalleryKey = null
+        }
+
+        if (vm.galleries.isEmpty()) {
+            EmptyScreen(onPickFolder = onPickFolder)
+        } else {
+            val ordered = vm.galleries.map { gallery ->
+                vm.overviews[gallery.uri.toString()] ?: GalleryOverview(gallery, loading = true)
+            }
+            SwitcherScreen(
+                overviews = ordered,
+                canClose = false,
+                title = "Your Punctums",
+                subtitle = vm.homeSubtitle,
+                invitationStyle = vm.invitationStyle,
+                postcardListState = postcardListState,
+                ticketListState = ticketListState,
+                onSelect = vm::selectGallery,
+                onAdd = onPickFolder,
+                onToggleInvitationStyle = vm::toggleInvitationStyle,
+                onRename = { renameTarget = it },
+                onMove = vm::moveGallery,
+                onDelete = vm::removeGallery,
+                onClose = vm::closeSwitcher,
+            )
+        }
+
+        if (current != null && currentKey != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Ink)
+                    .graphicsLayer {
+                        alpha = if (readyGalleryKey == currentKey) 1f else 0f
+                    },
+            ) {
+                key(currentKey) {
                     val listState = rememberLazyListState()
                     GalleryScreen(
-                        gallery = visibleGallery,
+                        gallery = current,
                         photos = vm.photos,
-                        overview = vm.overviews[visibleGallery.uri.toString()],
+                        overview = vm.overviews[currentKey],
                         loading = vm.loadingPhotos,
                         listState = listState,
                         onOpenSwitcher = vm::openSwitcher,
                         onRename = { renameTarget = it },
                         onSelectPhoto = vm::openDetail,
+                        onDeletePhoto = vm::deletePhoto,
                         onWarmThumbnails = vm::warmGalleryThumbnails,
+                        onContentReady = {
+                            if (vm.currentUri == currentKey) readyGalleryKey = currentKey
+                        },
                     )
                 }
             }
@@ -238,14 +244,10 @@ private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
         }
 
         val detailIndex = vm.selectedIndex
-        AnimatedVisibility(
-            visible = detailIndex != null && vm.photos.isNotEmpty(),
-            enter = fadeIn() + scaleIn(initialScale = 0.94f),
-            exit = fadeOut() + scaleOut(targetScale = 1.04f),
-        ) {
+        if (detailIndex != null && vm.photos.isNotEmpty()) {
             DetailScreen(
                 photos = vm.photos,
-                startIndex = detailIndex ?: 0,
+                startIndex = detailIndex,
                 onDelete = vm::deletePhoto,
                 onClose = vm::closeDetail,
                 onWarmImages = vm::warmDetailImages,

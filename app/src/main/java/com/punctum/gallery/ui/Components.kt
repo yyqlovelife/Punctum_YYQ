@@ -80,6 +80,7 @@ internal fun PunctumImage(
     modifier: Modifier = Modifier,
     animateOnLoad: Boolean = true,
     onSuccess: () -> Unit = {},
+    onError: () -> Unit = {},
 ) {
     var loaded by remember(model, animateOnLoad) { mutableStateOf(!animateOnLoad) }
     val alpha by animateFloatAsState(
@@ -100,6 +101,7 @@ internal fun PunctumImage(
             loaded = true
             onSuccess()
         },
+        onError = { onError() },
         modifier = modifier.graphicsLayer {
             this.alpha = alpha
             scaleX = scale

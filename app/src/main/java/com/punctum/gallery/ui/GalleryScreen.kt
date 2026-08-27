@@ -1,5 +1,9 @@
 package com.punctum.gallery.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -18,9 +22,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Collections
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -29,13 +34,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.request.ImageRequest
 import java.io.File
@@ -53,6 +67,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.FlowPreview
 
@@ -67,9 +83,19 @@ internal fun GalleryScreen(
     onOpenSwitcher: () -> Unit,
     onRename: (Gallery) -> Unit,
     onSelectPhoto: (Int) -> Unit,
+    onDeletePhoto: (Photo) -> Unit,
     onWarmThumbnails: (Int, Int) -> Unit,
+    onContentReady: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val firstRowUris = photos.take(2).map { it.uri.toString() }.toSet()
+    val firstRowKey = firstRowUris.joinToString("|")
+    var readyFirstRowUris by remember(gallery.uri, firstRowKey) { mutableStateOf(emptySet<String>()) }
+
+    LaunchedEffect(gallery.uri, loading, photos.isEmpty()) {
+        if (loading || photos.isEmpty()) onContentReady()
+    }
+
     LaunchedEffect(photos, listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index } }
             .map { visible ->
@@ -126,14 +152,28 @@ internal fun GalleryScreen(
                 }
             }
 
-            else -> itemsIndexed(
-                items = photos.chunked(2),
-                key = { rowIndex, row -> row.joinToString("|") { it.uri.toString() } + rowIndex },
-            ) { rowIndex, row ->
+            else -> items(
+                count = (photos.size + 1) / 2,
+                key = { rowIndex -> photos[rowIndex * 2].uri.toString() },
+            ) { rowIndex ->
+                val rowStartIndex = rowIndex * 2
+                val row = photos.subList(
+                    fromIndex = rowStartIndex,
+                    toIndex = (rowStartIndex + 2).coerceAtMost(photos.size),
+                )
                 OriginalRatioRow(
                     row = row,
-                    rowStartIndex = rowIndex * 2,
+                    rowStartIndex = rowStartIndex,
                     onSelectPhoto = onSelectPhoto,
+                    onDeletePhoto = onDeletePhoto,
+                    onPhotoReady = { photo ->
+                        val uriKey = photo.uri.toString()
+                        if (uriKey in firstRowUris && uriKey !in readyFirstRowUris) {
+                            val updated = readyFirstRowUris + uriKey
+                            readyFirstRowUris = updated
+                            if (updated.containsAll(firstRowUris)) onContentReady()
+                        }
+                    },
                 )
             }
         }
@@ -149,11 +189,16 @@ private fun OriginalRatioRow(
     row: List<Photo>,
     rowStartIndex: Int,
     onSelectPhoto: (Int) -> Unit,
+    onDeletePhoto: (Photo) -> Unit,
+    onPhotoReady: (Photo) -> Unit,
 ) {
     val context = LocalContext.current
+    val hapticFeedback = LocalHapticFeedback.current
     Row(modifier = Modifier.fillMaxWidth()) {
         row.forEachIndexed { offset, photo ->
             val aspect = photo.aspectRatio.coerceIn(0.45f, 2.4f)
+            val deleteProgress = remember(photo.uri) { Animatable(0f) }
+            var showDeleteProgress by remember(photo.uri) { mutableStateOf(false) }
             val imageModel = remember(photo.uri, photo.thumbnailPath) {
                 ImageRequest.Builder(context)
                     .data(photo.thumbnailPath?.let { File(it) }?.takeIf { it.exists() } ?: photo.uri)
@@ -168,20 +213,113 @@ private fun OriginalRatioRow(
                     .weight(aspect)
                     .aspectRatio(aspect)
                     .background(Surface1)
-                    .clickable { onSelectPhoto(rowStartIndex + offset) },
+                    .pointerInput(photo.uri, rowStartIndex, offset) {
+                        detectTapGestures(
+                            onPress = {
+                                coroutineScope {
+                                    var pressed = true
+                                    var deleteStarted = false
+                                    var deleteCommitted = false
+                                    val deleteJob = launch {
+                                        delay(200)
+                                        if (!pressed) return@launch
+
+                                        deleteStarted = true
+                                        showDeleteProgress = true
+                                        deleteProgress.snapTo(0f)
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        deleteProgress.animateTo(
+                                            targetValue = 1f,
+                                            animationSpec = tween(
+                                                durationMillis = 500,
+                                                easing = LinearEasing,
+                                            ),
+                                        )
+                                        if (pressed) {
+                                            deleteCommitted = true
+                                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onDeletePhoto(photo)
+                                        }
+                                    }
+
+                                    val released = tryAwaitRelease()
+                                    pressed = false
+                                    if (!deleteStarted && released) {
+                                        onSelectPhoto(rowStartIndex + offset)
+                                    }
+                                    deleteJob.cancel()
+                                    if (!deleteCommitted) {
+                                        deleteProgress.animateTo(
+                                            targetValue = 0f,
+                                            animationSpec = tween(durationMillis = 120),
+                                        )
+                                        showDeleteProgress = false
+                                    }
+                                }
+                            },
+                        )
+                    },
             ) {
                 PunctumImage(
                     model = imageModel,
                     contentDescription = photo.name,
                     contentScale = ContentScale.Crop,
                     animateOnLoad = false,
+                    onSuccess = { onPhotoReady(photo) },
+                    onError = { onPhotoReady(photo) },
                     modifier = Modifier.fillMaxSize(),
                 )
+                if (showDeleteProgress) {
+                    Box(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                        DeleteProgressBadge(progress = deleteProgress.value)
+                    }
+                }
             }
         }
         if (row.size == 1) {
             Spacer(Modifier.weight(row.first().aspectRatio.coerceIn(0.45f, 2.4f)))
         }
+    }
+}
+
+@Composable
+private fun DeleteProgressBadge(
+    progress: Float,
+    size: Dp = 34.dp,
+) {
+    val deleteRed = Color(0xFFE63B42)
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(
+                color = Color.Black.copy(alpha = 0.72f),
+                shape = androidx.compose.foundation.shape.CircleShape,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxSize().padding(2.dp)) {
+            val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+            drawArc(
+                color = Color.White.copy(alpha = 0.28f),
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter = false,
+                style = stroke,
+            )
+            drawArc(
+                color = deleteRed,
+                startAngle = -90f,
+                sweepAngle = 360f * progress.coerceIn(0f, 1f),
+                useCenter = false,
+                style = stroke,
+            )
+        }
+        Icon(
+            imageVector = Icons.Outlined.DeleteOutline,
+            contentDescription = "按住删除",
+            tint = Color.White,
+            modifier = Modifier.size(17.dp),
+        )
     }
 }
 
