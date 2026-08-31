@@ -2,24 +2,26 @@ package com.punctum.gallery
 
 import android.app.Application
 import android.app.PendingIntent
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.punctum.gallery.data.GalleryImageCache
 import com.punctum.gallery.data.GalleryStore
 import com.punctum.gallery.data.PhotoRepository
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.model.InvitationCardStyle
 import com.punctum.gallery.model.Photo
+import com.punctum.gallery.model.SystemAlbum
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.random.Random
 
 class GalleryViewModel(app: Application) : AndroidViewModel(app) {
@@ -27,11 +29,17 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     private val store = GalleryStore(app)
     private val photoCache = mutableMapOf<String, List<Photo>>()
     private val thumbnailWarmJobs = mutableMapOf<String, Job>()
+    private val coverBuildJobs = mutableMapOf<String, Job>()
+    private val photoRefreshJobs = mutableMapOf<String, Job>()
     private var overviewRefreshJob: Job? = null
     private var dataRefreshJob: Job? = null
     private var foregroundSyncJob: Job? = null
     private var pendingDeletePhoto: Photo? = null
+    private var pendingMovePhoto: Photo? = null
+    private var pendingMoveDestination: SystemAlbum? = null
+    private var moveInProgress: Photo? = null
     private val deleteTombstones = mutableMapOf<String, Long>()
+    private val moveTombstones = mutableMapOf<String, Long>()
 
     var galleries by mutableStateOf<List<Gallery>>(emptyList())
         private set
@@ -48,6 +56,18 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     var homeSubtitle by mutableStateOf(HOME_SUBTITLES.first())
         private set
     var pendingDeleteConfirmation by mutableStateOf<PendingIntent?>(null)
+        private set
+    var pendingMediaManagementPermission by mutableStateOf(false)
+        private set
+    var pendingMoveConfirmation by mutableStateOf<PendingIntent?>(null)
+        private set
+    var completedMove by mutableStateOf<CompletedPhotoMove?>(null)
+        private set
+    var moveError by mutableStateOf<String?>(null)
+        private set
+    var homeToast by mutableStateOf<String?>(null)
+        private set
+    var pendingHomeScrollIndex by mutableStateOf<Int?>(null)
         private set
 
     // 覆层状态
@@ -68,7 +88,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             .filter { it.isReadPermission }
             .map { it.uri.toString() }
             .toSet()
-        val stored = store.loadGalleries().filter { permitted.contains(it.uri.toString()) }
+        val stored = store.loadGalleries().filter { gallery ->
+            SystemAlbum.isAlbumUri(gallery.uri) || permitted.contains(gallery.uri.toString())
+        }
         galleries = stored
         if (stored.isNotEmpty()) {
             store.saveGalleries(stored)
@@ -77,17 +99,32 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun addGallery(uri: Uri) {
-        val ctx = getApplication<Application>()
-        ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val key = uri.toString()
-        if (galleries.none { it.uri.toString() == key }) {
-            val name = PhotoRepository.displayName(ctx, uri) ?: "未命名画廊"
-            galleries = galleries + Gallery(uri, name)
-            store.saveGalleries(galleries)
+    fun addSystemAlbums(albums: List<SystemAlbum>) {
+        val existing = galleries.map { it.uri.toString() }.toSet()
+        val insertAt = galleries.size
+        val added = albums.mapNotNull { album ->
+            val key = album.uri.toString()
+            if (key in existing) {
+                null
+            } else {
+                Gallery(album.uri, album.displayName)
+            }
         }
-        showSwitcher = false
-        selectGallery(key)
+        if (added.isNotEmpty()) {
+            galleries = galleries + added
+            store.saveGalleries(galleries)
+            pendingHomeScrollIndex = insertAt
+        }
+        goHome()
+        homeToast = "添加完成"
+    }
+
+    fun clearHomeToast() {
+        homeToast = null
+    }
+
+    fun clearPendingHomeScroll() {
+        pendingHomeScrollIndex = null
     }
 
     fun selectGallery(uriKey: String) {
@@ -154,6 +191,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         galleries = galleries.filterIndexed { i, _ -> i != index }
         overviews = overviews - key
         photoCache.remove(key)
+        coverBuildJobs.remove(key)?.cancel()
+        photoRefreshJobs.remove(key)?.cancel()
         store.removePhotoCache(key)
         if (currentUri == key) {
             currentUri = null
@@ -173,15 +212,16 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadPhotos(uriKey: String) {
         photoCache[uriKey]?.let { cached ->
             photos = cached
-            cacheOverview(uriKey, cached)
+            if (overviews[uriKey] == null) cacheOverview(uriKey, cached)
             loadingPhotos = false
+            refreshPhotos(uriKey, replaceVisible = false, cached = cached)
             return
         }
         val persisted = store.loadPhotoCache(uriKey)
         if (persisted.isNotEmpty()) {
             photoCache[uriKey] = persisted
             photos = persisted
-            cacheOverview(uriKey, persisted)
+            if (overviews[uriKey] == null) cacheOverview(uriKey, persisted)
             loadingPhotos = false
             refreshPhotos(uriKey, replaceVisible = false, cached = persisted)
             return
@@ -192,16 +232,43 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun refreshPhotos(uriKey: String, replaceVisible: Boolean, cached: List<Photo> = photoCache[uriKey].orEmpty()) {
-        viewModelScope.launch {
+        if (photoRefreshJobs[uriKey]?.isActive == true) return
+        photoRefreshJobs[uriKey] = viewModelScope.launch {
             val gallery = galleries.firstOrNull { it.uri.toString() == uriKey } ?: return@launch
-            val list = applyDeleteTombstones(
-                PhotoRepository.loadPhotos(getApplication(), gallery.uri, cached)
+            val currentCached = photoCache[uriKey] ?: cached
+            val latestPhotos = visiblePhotosForGallery(
+                uriKey,
+                PhotoRepository.loadLatestPhotos(getApplication(), gallery, currentCached),
             )
-            photoCache[uriKey] = list
-            store.savePhotoCache(uriKey, list)
-            cacheOverview(uriKey, list)
+            val latestIdentities = latestPhotos.map(::photoFileIdentity).toSet()
+            val quickList = visiblePhotosForGallery(
+                uriKey,
+                (
+                    latestPhotos +
+                        currentCached.filterNot { photoFileIdentity(it) in latestIdentities }
+                    ).sortedWith(PHOTO_NEWEST_FIRST),
+            )
+            if (quickList != currentCached) {
+                val mergedQuick = mergePhotoLists(currentCached, quickList)
+                photoCache[uriKey] = mergedQuick
+                store.savePhotoCache(uriKey, mergedQuick)
+                if (currentUri == uriKey && !isVisiblePhotoListFrozen()) {
+                    photos = mergePhotoLists(photos, mergedQuick)
+                    if (mergedQuick.isNotEmpty()) loadingPhotos = false
+                }
+            }
+            val list = visiblePhotosForGallery(
+                uriKey,
+                PhotoRepository.loadPhotos(getApplication(), gallery.uri, quickList),
+            )
+            val merged = mergePhotoLists(photoCache[uriKey].orEmpty(), list)
+            photoCache[uriKey] = merged
+            store.savePhotoCache(uriKey, merged)
+            cacheOverview(uriKey, merged)
             if (currentUri == uriKey) {
-                if (replaceVisible || photos != list) photos = list
+                if (!isVisiblePhotoListFrozen() && (replaceVisible || photos != merged)) {
+                    photos = mergePhotoLists(photos, merged)
+                }
                 loadingPhotos = false
             }
         }
@@ -209,25 +276,43 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun cacheOverview(uriKey: String, list: List<Photo>) {
         val gallery = galleries.firstOrNull { it.uri.toString() == uriKey } ?: return
-        val immediate = PhotoRepository.overviewFromPhotos(gallery, list).let { base ->
-            overviews[uriKey]?.let { cached ->
-                base.copy(
-                    postcardCoverPath = cached.postcardCoverPath,
-                    ticketCoverPath = cached.ticketCoverPath,
-                )
-            } ?: base
+        val base = PhotoRepository.overviewFromPhotos(gallery, list)
+        val previous = overviews[uriKey]
+        val coversUnchanged = previous?.coverUris == base.coverUris
+        val reusableAssets = coversUnchanged &&
+            previous?.postcardCoverPath?.let { File(it).isFile } == true &&
+            previous?.ticketCoverPath?.let { File(it).isFile } == true &&
+            previous?.ticketDominantColorArgb != null &&
+            previous?.ticketColorVersion == com.punctum.gallery.data.GalleryImageCache.TICKET_COLOR_VERSION
+        val immediate = if (coversUnchanged) {
+            val cached = requireNotNull(previous)
+            base.copy(
+                postcardCoverPath = cached.postcardCoverPath,
+                ticketCoverPath = cached.ticketCoverPath,
+                ticketDominantColorArgb = cached.ticketDominantColorArgb,
+                ticketColorVersion = cached.ticketColorVersion,
+            )
+        } else {
+            base
         }
         updateOverviewIfChanged(uriKey, immediate)
-        val existing = overviews[uriKey]
-        if (existing?.coverUris == immediate.coverUris &&
-            !existing.postcardCoverPath.isNullOrBlank() &&
-            !existing.ticketCoverPath.isNullOrBlank()
-        ) {
+        if (base.coverUris.isEmpty()) {
+            coverBuildJobs.remove(uriKey)?.cancel()
             return
         }
-        viewModelScope.launch {
+        if (reusableAssets) return
+
+        val expectedCoverUris = base.coverUris
+        coverBuildJobs.remove(uriKey)?.cancel()
+        coverBuildJobs[uriKey] = viewModelScope.launch {
             val overview = PhotoRepository.buildOverviewFromPhotos(getApplication(), gallery, list)
-            updateOverviewIfChanged(uriKey, overview)
+            val latestList = photoCache[uriKey] ?: return@launch
+            val latestCoverUris = PhotoRepository.overviewFromPhotos(gallery, latestList).coverUris
+            if (latestCoverUris == expectedCoverUris &&
+                galleries.any { it.uri.toString() == uriKey }
+            ) {
+                updateOverviewIfChanged(uriKey, overview)
+            }
         }
     }
 
@@ -249,15 +334,33 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             key to (overviews[key] ?: GalleryOverview(g, loading = true))
         }
         overviews = seeded
-        overviewRefreshJob?.cancel()
+        if (overviewRefreshJob?.isActive == true) return
         overviewRefreshJob = viewModelScope.launch {
-            galleries.forEach { g ->
-                val key = g.uri.toString()
-                if (!force && overviews[key]?.loading == false) return@forEach
-                val cached = photoCache[key]
-                val ov = if (cached != null) PhotoRepository.buildOverviewFromPhotos(getApplication(), g, cached)
-                else PhotoRepository.loadOverview(getApplication(), g)
-                updateOverviewIfChanged(key, ov)
+            val gallerySnapshot = galleries.toList()
+            val memoryCacheSnapshot = photoCache.toMap()
+            val cachedPhotosByGallery = withContext(Dispatchers.IO) {
+                gallerySnapshot.associate { gallery ->
+                    val key = gallery.uri.toString()
+                    key to (memoryCacheSnapshot[key] ?: store.loadPhotoCache(key))
+                }
+            }
+
+            // 每个画廊只扫描一次，并行按 EXIF 拍摄时间计算数量、跨度和前 4 张封面。
+            // 已有照片复用 v3 元数据缓存，只为新增或发生变化的文件重新读取 EXIF。
+            coroutineScope {
+                gallerySnapshot.forEach { gallery ->
+                    launch {
+                        val key = gallery.uri.toString()
+                        if (!force && overviews[key]?.loading == false) return@launch
+                        val cached = cachedPhotosByGallery[key].orEmpty()
+                        coverBuildJobs.remove(key)?.cancel()
+                        val overview = PhotoRepository.loadOverview(getApplication(), gallery, cached)
+                        coverBuildJobs.remove(key)?.cancel()
+                        if (galleries.any { it.uri.toString() == key }) {
+                            updateOverviewIfChanged(key, overview)
+                        }
+                    }
+                }
             }
         }
     }
@@ -272,8 +375,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         val uriKey = currentUri ?: return
         val list = photoCache[uriKey] ?: photos
         if (list.isEmpty()) return
-        val from = (firstPhotoIndex - 100).coerceAtLeast(0)
-        val to = (lastPhotoIndex + 100).coerceAtMost(list.lastIndex)
+        val from = firstPhotoIndex.coerceAtLeast(0)
+        val to = (lastPhotoIndex + 8).coerceAtMost(list.lastIndex)
         if (from > to) return
         val window = list.subList(from, to + 1)
         thumbnailWarmJobs[uriKey]?.cancel()
@@ -282,9 +385,12 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             val warmedByUri = warmed.associateBy { it.uri }
             val current = photoCache[uriKey].orEmpty()
             val updated = current.map { warmedByUri[it.uri] ?: it }
+            if (updated == current) return@launch
             photoCache[uriKey] = updated
             store.savePhotoCache(uriKey, updated)
-            if (currentUri == uriKey) photos = updated
+            if (currentUri == uriKey && !isVisiblePhotoListFrozen()) {
+                photos = applyMoveTombstones(uriKey, updated)
+            }
             withContext(Dispatchers.IO) {
                 com.punctum.gallery.data.GalleryImageCache.trimGalleryThumbnails(getApplication(), uriKey, updated)
             }
@@ -303,7 +409,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                 val photo = list[index]
                 loader.enqueue(
                     coil.request.ImageRequest.Builder(context)
-                        .data(photo.uri)
+                        .data(com.punctum.gallery.data.PhotoStill.forDetail(photo))
                         .memoryCacheKey("detail:${photo.uri}")
                         .diskCacheKey("detail:${photo.uri}")
                         .size(1800)
@@ -317,23 +423,46 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     fun deletePhoto(photo: Photo) {
         markDeleting(photo)
         removePhotoFromState(photo)
+        performDelete(photo)
+    }
+
+    private fun performDelete(photo: Photo) {
         viewModelScope.launch {
-            val gallery = currentGallery ?: return@launch
+            val gallery = currentGallery
+            if (gallery == null) {
+                clearDeleting(photo)
+                refreshCurrentData()
+                return@launch
+            }
             when (val result = PhotoRepository.deletePhoto(getApplication(), gallery.uri, photo)) {
-                PhotoRepository.DeleteResult.Deleted -> {
-                    delay(10_000)
-                    clearDeleting(photo)
+                PhotoRepository.DeleteResult.Deleted -> Unit
+                PhotoRepository.DeleteResult.NeedsMediaManagementPermission -> {
+                    pendingDeletePhoto = photo
+                    pendingMediaManagementPermission = true
                 }
                 PhotoRepository.DeleteResult.Failed -> {
                     clearDeleting(photo)
                     refreshCurrentData()
                 }
                 is PhotoRepository.DeleteResult.NeedsUserAction -> {
-                    clearDeleting(photo)
                     pendingDeletePhoto = photo
                     pendingDeleteConfirmation = result.pendingIntent
                 }
             }
+        }
+    }
+
+    fun onMediaManagementPermissionHandled(granted: Boolean) {
+        val photo = pendingDeletePhoto
+        pendingDeletePhoto = null
+        pendingMediaManagementPermission = false
+        if (photo == null) return
+        if (granted) {
+            markDeleting(photo)
+            performDelete(photo)
+        } else {
+            clearDeleting(photo)
+            refreshCurrentData()
         }
     }
 
@@ -342,8 +471,86 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         pendingDeletePhoto = null
         pendingDeleteConfirmation = null
         if (confirmed && photo != null) {
+            markDeleting(photo)
             removePhotoFromState(photo)
+        } else if (photo != null) {
+            clearDeleting(photo)
             refreshCurrentData()
+        }
+    }
+
+    fun movePhoto(photo: Photo, destination: SystemAlbum) {
+        if (destination.uri.toString() == currentUri) return
+        val index = photos.indexOfFirst { it.uri == photo.uri }
+        val next = if (index >= 0) photos.getOrNull(index + 1) else null
+        moveInProgress = photo
+        viewModelScope.launch {
+            when (val result = PhotoRepository.movePhoto(getApplication(), photo, destination)) {
+                PhotoRepository.MoveResult.Moved -> {
+                    markMovedFrom(currentUri, photo)
+                    completedMove = CompletedPhotoMove(photo, destination, next)
+                }
+                PhotoRepository.MoveResult.SameAlbum ->
+                    moveInProgress = null
+                is PhotoRepository.MoveResult.NeedsUserAction -> {
+                    moveInProgress = null
+                    pendingMovePhoto = photo
+                    pendingMoveDestination = destination
+                    pendingMoveConfirmation = result.pendingIntent
+                }
+                PhotoRepository.MoveResult.Failed -> {
+                    moveInProgress = null
+                    moveError = "移动失败，请稍后重试"
+                }
+            }
+        }
+    }
+
+    fun onMoveConfirmationHandled(confirmed: Boolean) {
+        val photo = pendingMovePhoto
+        val destination = pendingMoveDestination
+        pendingMovePhoto = null
+        pendingMoveDestination = null
+        pendingMoveConfirmation = null
+        if (confirmed && photo != null && destination != null) {
+            movePhoto(photo, destination)
+        }
+    }
+
+    fun acknowledgeCompletedMove() {
+        val move = completedMove ?: return
+        removePhotoFromState(move.photo)
+        val destKey = move.destination.uri.toString()
+        if (photos.isEmpty()) {
+            homeToast = "该项目已移动到 ${move.destination.displayName}"
+        }
+        if (galleries.any { it.uri.toString() == destKey }) {
+            clearMovedInto(destKey, move.photo)
+            val destList = ((photoCache[destKey] ?: store.loadPhotoCache(destKey)) + move.photo)
+                .distinctBy { it.uri }
+                .sortedWith(PHOTO_NEWEST_FIRST)
+            photoCache[destKey] = destList
+            store.savePhotoCache(destKey, destList)
+            cacheOverview(destKey, destList)
+        }
+        moveInProgress = null
+        completedMove = null
+    }
+
+    private fun mergePhotoLists(current: List<Photo>, incoming: List<Photo>): List<Photo> {
+        if (current.isEmpty()) return incoming
+        val currentByUri = current.associateBy { it.uri }
+        return incoming.map { new ->
+            val old = currentByUri[new.uri]
+            if (old != null && old.width == new.width && old.height == new.height) {
+                if (old.thumbnailPath == null && new.thumbnailPath != null) {
+                    old.copy(thumbnailPath = new.thumbnailPath)
+                } else {
+                    old
+                }
+            } else {
+                new
+            }
         }
     }
 
@@ -363,10 +570,50 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun isVisiblePhotoListFrozen(): Boolean =
+        moveInProgress != null || completedMove != null
+
+    private fun visiblePhotosForGallery(uriKey: String, list: List<Photo>): List<Photo> =
+        excludeHeldMove(applyMoveTombstones(uriKey, applyDeleteTombstones(list)), uriKey)
+
+    private fun excludeHeldMove(list: List<Photo>, uriKey: String): List<Photo> {
+        if (uriKey != currentUri) return list
+        val heldUri = completedMove?.photo?.uri ?: return list
+        return list.filterNot { it.uri == heldUri }
+    }
+
+    private fun markMovedFrom(uriKey: String?, photo: Photo) {
+        if (uriKey.isNullOrBlank()) return
+        val until = System.currentTimeMillis() + MOVE_TOMBSTONE_MILLIS
+        moveTombstones[moveTombstoneUriKey(uriKey, photo)] = until
+        moveTombstones[moveTombstoneIdentityKey(uriKey, photo)] = until
+    }
+
+    private fun clearMovedInto(uriKey: String, photo: Photo) {
+        moveTombstones.remove(moveTombstoneUriKey(uriKey, photo))
+        moveTombstones.remove(moveTombstoneIdentityKey(uriKey, photo))
+    }
+
+    private fun applyMoveTombstones(uriKey: String, list: List<Photo>): List<Photo> {
+        val now = System.currentTimeMillis()
+        moveTombstones.entries.removeIf { it.value <= now }
+        if (moveTombstones.isEmpty()) return list
+        return list.filterNot { photo ->
+            moveTombstones.containsKey(moveTombstoneUriKey(uriKey, photo)) ||
+                moveTombstones.containsKey(moveTombstoneIdentityKey(uriKey, photo))
+        }
+    }
+
+    private fun moveTombstoneUriKey(uriKey: String, photo: Photo): String =
+        "$uriKey|uri|${photo.uri}"
+
+    private fun moveTombstoneIdentityKey(uriKey: String, photo: Photo): String =
+        "$uriKey|id|${photoFileIdentity(photo)}"
+
     private fun markDeleting(photo: Photo) {
         val now = System.currentTimeMillis()
-        deleteTombstones[photo.uri.toString()] = now + 15_000
-        deleteTombstones[photoSignature(photo)] = now + 15_000
+        deleteTombstones[photo.uri.toString()] = now + DELETE_TOMBSTONE_MILLIS
+        deleteTombstones[photoSignature(photo)] = now + DELETE_TOMBSTONE_MILLIS
     }
 
     private fun clearDeleting(photo: Photo) {
@@ -387,11 +634,23 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     private fun photoSignature(photo: Photo): String =
         "${photo.name}|${photo.fileSizeBytes}|${photo.modifiedMillis}"
 
+    private fun photoFileIdentity(photo: Photo): String =
+        "${photo.name}|${photo.fileSizeBytes}"
+
     fun closeSwitcher() { showSwitcher = false }
     fun openDetail(index: Int) { selectedIndex = index }
     fun closeDetail() { selectedIndex = null }
 
+    fun clearMoveError() { moveError = null }
+
     companion object {
+        private const val DELETE_TOMBSTONE_MILLIS = 120_000L
+        private const val MOVE_TOMBSTONE_MILLIS = 45_000L
+        private val PHOTO_NEWEST_FIRST =
+            compareByDescending<Photo> { it.takenMillis }
+                .thenByDescending { it.modifiedMillis }
+                .thenBy { it.uri.toString() }
+
         private val HOME_SUBTITLES = listOf(
             "每一个画廊，都是你来时的路",
             "那些感动你的，那些你凝望的",
@@ -411,3 +670,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 }
+
+data class CompletedPhotoMove(
+    val photo: Photo,
+    val destination: SystemAlbum,
+    val nextPhoto: Photo?,
+)

@@ -6,7 +6,10 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.database.ContentObserver
+import android.content.Intent
+import android.net.Uri
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,13 +20,17 @@ import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -38,9 +45,15 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
+import com.punctum.gallery.ui.AlbumPickerDialog
 import androidx.core.view.WindowCompat
 import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
@@ -49,6 +62,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
+import com.punctum.gallery.model.InvitationCardStyle
 import com.punctum.gallery.ui.DetailScreen
 import com.punctum.gallery.ui.EmptyScreen
 import com.punctum.gallery.ui.GalleryScreen
@@ -67,9 +81,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             PunctumTheme {
                 val vm: GalleryViewModel = viewModel()
-                val picker = rememberLauncherForActivityResult(
-                    ActivityResultContracts.OpenDocumentTree()
-                ) { uri -> uri?.let { vm.addGallery(it) } }
                 val mediaPermissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestMultiplePermissions()
                 ) { vm.refreshCurrentData() }
@@ -77,6 +88,18 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.StartIntentSenderForResult()
                 ) { result ->
                     vm.onDeleteConfirmationHandled(result.resultCode == Activity.RESULT_OK)
+                }
+                val moveConfirmationLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartIntentSenderForResult()
+                ) { result ->
+                    vm.onMoveConfirmationHandled(result.resultCode == Activity.RESULT_OK)
+                }
+                val mediaManagementLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult()
+                ) {
+                    val granted = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        MediaStore.canManageMedia(this@MainActivity)
+                    vm.onMediaManagementPermissionHandled(granted)
                 }
 
                 LaunchedEffect(Unit) {
@@ -92,6 +115,11 @@ class MainActivity : ComponentActivity() {
                             this@MainActivity,
                             Manifest.permission.ACCESS_MEDIA_LOCATION,
                         ) == PackageManager.PERMISSION_GRANTED
+                    val hasLegacyWritePermission = Build.VERSION.SDK_INT > Build.VERSION_CODES.P ||
+                        ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                        ) == PackageManager.PERMISSION_GRANTED
                     val permissions = buildList {
                         if (!hasImagePermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             add(Manifest.permission.READ_MEDIA_IMAGES)
@@ -101,6 +129,9 @@ class MainActivity : ComponentActivity() {
                         }
                         if (!hasLocationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             add(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                        }
+                        if (!hasLegacyWritePermission && Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                            add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                         }
                     }
                     if (permissions.isNotEmpty()) {
@@ -142,19 +173,70 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                val pendingMoveConfirmation = vm.pendingMoveConfirmation
+                LaunchedEffect(pendingMoveConfirmation) {
+                    pendingMoveConfirmation?.let { pending ->
+                        moveConfirmationLauncher.launch(
+                            IntentSenderRequest.Builder(pending.intentSender).build()
+                        )
+                    }
+                }
+                val pendingMediaManagementPermission = vm.pendingMediaManagementPermission
+                LaunchedEffect(pendingMediaManagementPermission) {
+                    if (pendingMediaManagementPermission) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            val intent = Intent(
+                                Settings.ACTION_REQUEST_MANAGE_MEDIA,
+                                Uri.parse("package:$packageName"),
+                            )
+                            if (intent.resolveActivity(packageManager) != null) {
+                                mediaManagementLauncher.launch(intent)
+                            } else {
+                                vm.onMediaManagementPermissionHandled(false)
+                            }
+                        } else {
+                            vm.onMediaManagementPermissionHandled(false)
+                        }
+                    }
+                }
 
-                PunctumApp(vm = vm, onPickFolder = { picker.launch(null) })
+                PunctumApp(vm = vm)
             }
         }
     }
 }
 
 @Composable
-private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
+private fun PunctumApp(vm: GalleryViewModel) {
     var renameTarget by remember { mutableStateOf<Gallery?>(null) }
+    var showAlbumPicker by remember { mutableStateOf(false) }
     var readyGalleryKey by remember { mutableStateOf<String?>(null) }
     val postcardListState = rememberLazyListState()
     val ticketListState = rememberLazyListState()
+    val reversalFilmGridState = rememberLazyGridState()
+    val homeToast = vm.homeToast
+    LaunchedEffect(homeToast) {
+        if (homeToast == null) return@LaunchedEffect
+        delay(2200)
+        if (vm.homeToast == homeToast) vm.clearHomeToast()
+    }
+    val pendingScrollIndex = vm.pendingHomeScrollIndex
+    LaunchedEffect(pendingScrollIndex, vm.invitationStyle) {
+        val index = pendingScrollIndex ?: return@LaunchedEffect
+        snapshotFlow {
+            when (vm.invitationStyle) {
+                InvitationCardStyle.POSTCARD -> postcardListState.layoutInfo.totalItemsCount
+                InvitationCardStyle.TICKET -> ticketListState.layoutInfo.totalItemsCount
+                InvitationCardStyle.REVERSAL_FILM -> reversalFilmGridState.layoutInfo.totalItemsCount
+            }
+        }.first { it > index }
+        when (vm.invitationStyle) {
+            InvitationCardStyle.POSTCARD -> postcardListState.animateScrollToItem(index)
+            InvitationCardStyle.TICKET -> ticketListState.animateScrollToItem(index)
+            InvitationCardStyle.REVERSAL_FILM -> reversalFilmGridState.animateScrollToItem(index)
+        }
+        vm.clearPendingHomeScroll()
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(Ink)) {
         val current = vm.currentGallery
@@ -164,7 +246,7 @@ private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
         }
 
         if (vm.galleries.isEmpty()) {
-            EmptyScreen(onPickFolder = onPickFolder)
+            EmptyScreen(onPickFolder = { showAlbumPicker = true })
         } else {
             val ordered = vm.galleries.map { gallery ->
                 vm.overviews[gallery.uri.toString()] ?: GalleryOverview(gallery, loading = true)
@@ -177,8 +259,9 @@ private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
                 invitationStyle = vm.invitationStyle,
                 postcardListState = postcardListState,
                 ticketListState = ticketListState,
+                reversalFilmGridState = reversalFilmGridState,
                 onSelect = vm::selectGallery,
-                onAdd = onPickFolder,
+                onAdd = { showAlbumPicker = true },
                 onToggleInvitationStyle = vm::toggleInvitationStyle,
                 onRename = { renameTarget = it },
                 onMove = vm::moveGallery,
@@ -233,8 +316,9 @@ private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
                 invitationStyle = vm.invitationStyle,
                 postcardListState = postcardListState,
                 ticketListState = ticketListState,
+                reversalFilmGridState = reversalFilmGridState,
                 onSelect = vm::selectGallery,
-                onAdd = onPickFolder,
+                onAdd = { showAlbumPicker = true },
                 onToggleInvitationStyle = vm::toggleInvitationStyle,
                 onRename = { renameTarget = it },
                 onMove = vm::moveGallery,
@@ -248,9 +332,42 @@ private fun PunctumApp(vm: GalleryViewModel, onPickFolder: () -> Unit) {
             DetailScreen(
                 photos = vm.photos,
                 startIndex = detailIndex,
+                currentAlbumKey = currentKey,
+                completedMove = vm.completedMove,
+                moveError = vm.moveError,
                 onDelete = vm::deletePhoto,
                 onClose = vm::closeDetail,
                 onWarmImages = vm::warmDetailImages,
+                onMovePhoto = vm::movePhoto,
+                onAcknowledgeMove = vm::acknowledgeCompletedMove,
+                onClearMoveError = vm::clearMoveError,
+            )
+        }
+
+        if (showAlbumPicker) {
+            AlbumPickerDialog(
+                existingAlbumKeys = vm.galleries.map { it.uri.toString() }.toSet(),
+                onConfirm = { albums ->
+                    vm.addSystemAlbums(albums)
+                    showAlbumPicker = false
+                },
+                onDismiss = { showAlbumPicker = false },
+            )
+        }
+
+        AnimatedVisibility(
+            visible = homeToast != null,
+            modifier = Modifier.align(Alignment.Center),
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(160)),
+        ) {
+            Text(
+                homeToast.orEmpty(),
+                style = MaterialTheme.typography.labelSmall,
+                color = Bone.copy(alpha = 0.86f),
+                modifier = Modifier
+                    .background(Color(0xFF191919).copy(alpha = 0.82f), CircleShape)
+                    .padding(horizontal = 16.dp, vertical = 9.dp),
             )
         }
     }

@@ -33,13 +33,13 @@ internal fun EmptyScreen(onPickFolder: () -> Unit) {
         Text("Punctum", style = MaterialTheme.typography.displayMedium, color = Bone)
         Spacer(Modifier.height(18.dp))
         Text(
-            "为情绪而生的画廊。\n选择一个系统文件夹，映射为你的第一个展厅。",
+            "为情绪而生的画廊。\n从系统 DCIM 与 Pictures 图集里，映射你的第一个展厅。",
             style = MaterialTheme.typography.bodyMedium,
             color = Muted,
             textAlign = TextAlign.Center,
             lineHeight = 26.sp,
         )
         Spacer(Modifier.height(52.dp))
-        FrameButton(text = "选 择 系 统 文 件 夹", onClick = onPickFolder)
+        FrameButton(text = "选 择 系 统 图 集", onClick = onPickFolder)
     }
 }

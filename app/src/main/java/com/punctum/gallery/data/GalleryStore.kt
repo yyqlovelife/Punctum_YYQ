@@ -64,6 +64,10 @@ class GalleryStore(context: Context) {
                             },
                             postcardCoverPath = cached.optString("postcardCoverPath").ifBlank { null },
                             ticketCoverPath = cached.optString("ticketCoverPath").ifBlank { null },
+                            ticketDominantColorArgb = cached
+                                .takeIf { it.has("ticketDominantColorArgb") && !it.isNull("ticketDominantColorArgb") }
+                                ?.optInt("ticketDominantColorArgb"),
+                            ticketColorVersion = cached.optInt("ticketColorVersion", 0),
                             loading = false,
                         )
                     )
@@ -91,6 +95,8 @@ class GalleryStore(context: Context) {
                 put("covers", covers)
                 put("postcardCoverPath", overview.postcardCoverPath)
                 put("ticketCoverPath", overview.ticketCoverPath)
+                overview.ticketDominantColorArgb?.let { put("ticketDominantColorArgb", it) }
+                put("ticketColorVersion", overview.ticketColorVersion)
             }
         )
         prefs.edit().putString(KEY_OVERVIEWS, root.toString()).apply()
@@ -135,6 +141,10 @@ class GalleryStore(context: Context) {
                 fileSizeBytes = obj.optLong("fileSizeBytes", 0L),
                 modifiedMillis = obj.optLong("modifiedMillis", 0L),
                 thumbnailPath = obj.optString("thumbnailPath").ifBlank { null },
+                motionPhotoVideoLength = obj.optLong("motionPhotoVideoLength", 0L),
+                motionPhotoPresentationTimestampUs =
+                    obj.optLong("motionPhotoPresentationTimestampUs", 0L),
+                motionPhotoChecked = obj.optBoolean("motionPhotoChecked", false),
                 metadataVersion = obj.optInt("metadataVersion", 0),
             )
         }
@@ -169,6 +179,12 @@ class GalleryStore(context: Context) {
                 put("fileSizeBytes", p.fileSizeBytes)
                 put("modifiedMillis", p.modifiedMillis)
                 put("thumbnailPath", p.thumbnailPath)
+                put("motionPhotoVideoLength", p.motionPhotoVideoLength)
+                put(
+                    "motionPhotoPresentationTimestampUs",
+                    p.motionPhotoPresentationTimestampUs,
+                )
+                put("motionPhotoChecked", p.motionPhotoChecked)
                 put("metadataVersion", p.metadataVersion)
             })
         }

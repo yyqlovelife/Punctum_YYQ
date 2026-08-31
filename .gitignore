@@ -12,3 +12,7 @@ local.properties
 app/build/
 *.jks
 *.keystore
+xcuserdata/
+*.xcuserstate
+/APK/*.apk
+/iOS/IPA/*.ipa

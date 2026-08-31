@@ -2,6 +2,7 @@ package com.punctum.gallery.data
 
 import android.content.Context
 import android.Manifest
+import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.app.PendingIntent
 import android.graphics.BitmapFactory
@@ -17,16 +18,21 @@ import androidx.exifinterface.media.ExifInterface
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.model.Photo
+import com.punctum.gallery.model.SystemAlbum
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.text.Collator
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.coroutines.resume
 
@@ -34,63 +40,193 @@ import kotlin.coroutines.resume
  * 核心能力：通过 SAF tree URI 读取用户授权文件夹里的照片与 EXIF。
  * 读取的是原始文件字节，GPS 不被系统抹除，且无需任何媒体/位置权限。
  *
- * 性能：批量加载时并行读取，并刻意「不做」逆地理编码（避免逐张联网）；
+ * 性能：批量加载复用缓存，未命中时限制 EXIF 并发，并刻意「不做」逆地理编码（避免逐张联网）；
  * 地名反查只在照片详情里按需进行。
  */
 object PhotoRepository {
 
+    private val exifReadSemaphore = Semaphore(4)
+
     sealed interface DeleteResult {
         data object Deleted : DeleteResult
+        data object NeedsMediaManagementPermission : DeleteResult
         data class NeedsUserAction(val pendingIntent: PendingIntent) : DeleteResult
         data object Failed : DeleteResult
     }
 
+    sealed interface MoveResult {
+        data object Moved : MoveResult
+        data object SameAlbum : MoveResult
+        data class NeedsUserAction(val pendingIntent: PendingIntent) : MoveResult
+        data object Failed : MoveResult
+    }
+
     fun displayName(context: Context, treeUri: Uri): String? =
-        DocumentFile.fromTreeUri(context, treeUri)?.name
+        if (SystemAlbum.isAlbumUri(treeUri)) {
+            treeUri.getQueryParameter("name")
+        } else {
+            DocumentFile.fromTreeUri(context, treeUri)?.name
+        }
+
+    /** DCIM、Pictures 大目录下的系统图集，按名称字母序。 */
+    suspend fun listDcimAndPicturesAlbums(context: Context): List<SystemAlbum> =
+        withContext(Dispatchers.IO) {
+            val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val hasRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+            val projection = buildList {
+                add(MediaStore.Images.Media.BUCKET_ID)
+                add(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+                if (hasRelativePath) {
+                    add(MediaStore.Images.Media.RELATIVE_PATH)
+                } else {
+                    add(MediaStore.Images.Media.DATA)
+                }
+            }.toTypedArray()
+            data class Acc(var name: String, var path: String, var count: Int)
+            val buckets = linkedMapOf<Long, Acc>()
+            try {
+                context.contentResolver.query(collection, projection, null, null, null)?.use { cursor ->
+                    val bucketIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
+                    val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+                    val pathIndex = if (hasRelativePath) {
+                        cursor.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
+                    } else {
+                        cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
+                    }
+                    while (cursor.moveToNext()) {
+                        val relativePath = if (hasRelativePath) {
+                            cursor.getString(pathIndex)
+                        } else {
+                            relativePathFromData(cursor.getString(pathIndex))
+                        } ?: continue
+                        if (!isDcimOrPicturesPath(relativePath)) continue
+                        val folderName = folderNameFromRelativePath(relativePath)
+                        if (folderName.startsWith(".")) continue
+                        val bucketId = cursor.getLong(bucketIndex)
+                        val displayName = cursor.getString(nameIndex)
+                            ?.trim()
+                            ?.ifBlank { null }
+                            ?: folderName
+                        val normalizedPath = normalizeRelativePath(relativePath)
+                        val acc = buckets.getOrPut(bucketId) {
+                            Acc(displayName, normalizedPath, 0)
+                        }
+                        acc.count += 1
+                        if (normalizedPath.length < acc.path.length) acc.path = normalizedPath
+                    }
+                }
+            } catch (_: Exception) {
+                return@withContext emptyList()
+            }
+            val collator = Collator.getInstance(Locale.getDefault())
+            buckets.map { (bucketId, acc) ->
+                SystemAlbum(
+                    bucketId = bucketId,
+                    displayName = acc.name,
+                    relativePath = acc.path,
+                    itemCount = acc.count,
+                )
+            }.sortedWith(compareBy(collator) { it.displayName })
+        }
+
+    /** 进入画廊时优先完整读取前几张的 EXIF 与尺寸，避免首屏短暂显示错误时间或 1:1 比例。 */
+    suspend fun loadLatestPhotos(
+        context: Context,
+        gallery: Gallery,
+        cachedPhotos: List<Photo> = emptyList(),
+    ): List<Photo> =
+        withContext(Dispatchers.IO) {
+            sortFilesByCaptureTime(
+                context = context,
+                files = scanFiles(context, gallery.uri),
+                cachedPhotos = cachedPhotos,
+            ).take(COVER_COUNT).map { (file, _) ->
+                readPhoto(
+                    context = context,
+                    uri = file.uri,
+                    name = file.name,
+                    fallbackTime = file.takenMillis ?: file.modifiedMillis,
+                    fileSizeBytes = file.sizeBytes,
+                    modifiedMillis = file.modifiedMillis,
+                    thumbnailPath = GalleryImageCache.thumbnailPath(
+                        context,
+                        gallery.uri.toString(),
+                        file.uri,
+                    ),
+                    motionPhotoVideoLength = file.motionPhotoVideoLength,
+                    motionPhotoPresentationTimestampUs =
+                        file.motionPhotoPresentationTimestampUs,
+                    motionPhotoChecked = file.motionPhotoChecked,
+                )
+            }.sortedWith(PHOTO_NEWEST_FIRST)
+        }
 
     suspend fun loadPhotos(context: Context, treeUri: Uri, cachedPhotos: List<Photo> = emptyList()): List<Photo> =
         withContext(Dispatchers.IO) {
             val galleryKey = treeUri.toString()
             val cachedByUri = cachedPhotos.associateBy { it.uri.toString() }
-            val cachedBySignature = cachedPhotos.associateBy { "${it.name}|${it.modifiedMillis}|${it.fileSizeBytes}" }
+            val cachedBySignature = cachedPhotos.associateBy { "${it.name}|${it.fileSizeBytes}" }
             val files = scanFiles(context, treeUri)
-            val photos = coroutineScope {
-                files.map { file ->
-                    async {
-                        val cached = cachedByUri[file.uri.toString()]
-                            ?: cachedBySignature["${file.name}|${file.modifiedMillis}|${file.sizeBytes}"]
-                        if (cached != null &&
-                            cached.modifiedMillis == file.modifiedMillis &&
-                            cached.fileSizeBytes == file.sizeBytes &&
-                            cached.gpsReadAttempted &&
-                            cached.metadataVersion >= METADATA_VERSION
-                        ) {
-                            val targetThumb = GalleryImageCache.thumbnailPath(context, galleryKey, file.uri)
-                            cached.copy(
-                                uri = file.uri,
-                                thumbnailPath = cached.thumbnailPath
-                                    ?.takeIf { it == targetThumb }
-                                    ?: targetThumb,
-                            )
+            val photos = files.map { file ->
+                val cached = cachedByUri[file.uri.toString()]
+                    ?: cachedBySignature["${file.name}|${file.sizeBytes}"]
+                if (cached != null &&
+                    cachedMatchesFile(cached, file) &&
+                    cached.metadataVersion >= METADATA_VERSION
+                ) {
+                    val targetThumb = GalleryImageCache.thumbnailPath(context, galleryKey, file.uri)
+                    val resolvedTakenMillis = cached.takenMillis
+                        .takeIf { it > 0L }
+                        ?: file.takenMillis
+                        ?: file.modifiedMillis
+                    cached.copy(
+                        uri = file.uri,
+                        modifiedMillis = file.modifiedMillis,
+                        fileSizeBytes = file.sizeBytes,
+                        takenMillis = resolvedTakenMillis,
+                        dateTaken = formatDate(resolvedTakenMillis),
+                        thumbnailPath = cached.thumbnailPath
+                            ?.takeIf { it == targetThumb }
+                            ?: targetThumb,
+                        motionPhotoVideoLength = if (file.motionPhotoChecked) {
+                            file.motionPhotoVideoLength
                         } else {
-                            readPhoto(
-                                context = context,
-                                uri = file.uri,
-                                name = file.name,
-                                fallbackTime = file.takenMillis ?: file.modifiedMillis,
-                                fileSizeBytes = file.sizeBytes,
-                                modifiedMillis = file.modifiedMillis,
-                                thumbnailPath = GalleryImageCache.thumbnailPath(context, galleryKey, file.uri),
-                            )
-                        }
-                    }
-                }.awaitAll()
+                            cached.motionPhotoVideoLength
+                        },
+                        motionPhotoPresentationTimestampUs =
+                            if (file.motionPhotoChecked) {
+                                file.motionPhotoPresentationTimestampUs
+                            } else {
+                                cached.motionPhotoPresentationTimestampUs
+                            },
+                        motionPhotoChecked =
+                            file.motionPhotoChecked || cached.motionPhotoChecked,
+                    )
+                } else {
+                    readPhoto(
+                        context = context,
+                        uri = file.uri,
+                        name = file.name,
+                        fallbackTime = file.takenMillis ?: file.modifiedMillis,
+                        fileSizeBytes = file.sizeBytes,
+                        modifiedMillis = file.modifiedMillis,
+                        thumbnailPath = GalleryImageCache.thumbnailPath(context, galleryKey, file.uri),
+                        motionPhotoVideoLength = file.motionPhotoVideoLength,
+                        motionPhotoPresentationTimestampUs =
+                            file.motionPhotoPresentationTimestampUs,
+                        motionPhotoChecked = file.motionPhotoChecked,
+                    )
+                }
             }
-            photos.sortedByDescending { it.takenMillis } // 拍摄时间新→老
+            photos.sortedWith(PHOTO_NEWEST_FIRST)
         }
 
     /** 未缓存照片时，单独扫描计算画廊概览（数量 / 时间跨度 / 封面）。 */
-    suspend fun loadOverview(context: Context, gallery: Gallery): GalleryOverview =
+    suspend fun loadOverview(
+        context: Context,
+        gallery: Gallery,
+        cachedPhotos: List<Photo> = emptyList(),
+    ): GalleryOverview =
         withContext(Dispatchers.IO) {
             val files = scanFiles(context, gallery.uri)
             if (files.isEmpty()) return@withContext GalleryOverview(
@@ -100,10 +236,12 @@ object PhotoRepository {
                 coverUris = emptyList(),
                 loading = false,
             )
-            val times = coroutineScope {
-                files.map { file -> async { file.takenMillis ?: readTakenMillis(context, file.uri, file.modifiedMillis) } }.awaitAll()
-            }.sorted()
-            val datedFiles = files.zip(times).sortedByDescending { it.second }
+            val datedFiles = sortFilesByCaptureTime(
+                context = context,
+                files = files,
+                cachedPhotos = cachedPhotos,
+            )
+            val times = datedFiles.map { it.second }.sorted()
             val covers = datedFiles.take(COVER_COUNT).map { it.first.uri }
             val coverPaths = GalleryImageCache.buildCovers(context, gallery.uri.toString(), covers)
             GalleryOverview(
@@ -111,8 +249,10 @@ object PhotoRepository {
                 count = files.size,
                 timeSpan = formatSpan(times),
                 coverUris = covers,
-                postcardCoverPath = coverPaths.first,
-                ticketCoverPath = coverPaths.second,
+                postcardCoverPath = coverPaths.postcardPath,
+                ticketCoverPath = coverPaths.ticketPath,
+                ticketDominantColorArgb = coverPaths.ticketDominantColorArgb,
+                ticketColorVersion = coverPaths.ticketColorVersion,
                 loading = false,
             )
         }
@@ -126,8 +266,9 @@ object PhotoRepository {
             coverUris = emptyList(),
             loading = false,
         )
-        val span = formatSpan(photos.map { it.takenMillis }.filter { it > 0 }.sorted())
-        val covers = photos.take(COVER_COUNT).map { it.uri }
+        val newestFirst = photos.sortedWith(PHOTO_NEWEST_FIRST)
+        val span = formatSpan(newestFirst.map { it.takenMillis }.filter { it > 0 }.sorted())
+        val covers = newestFirst.take(COVER_COUNT).map { it.uri }
         return GalleryOverview(
             gallery = gallery,
             count = photos.size,
@@ -141,7 +282,12 @@ object PhotoRepository {
         withContext(Dispatchers.IO) {
             val base = overviewFromPhotos(gallery, photos)
             val coverPaths = GalleryImageCache.buildCovers(context, gallery.uri.toString(), base.coverUris)
-            base.copy(postcardCoverPath = coverPaths.first, ticketCoverPath = coverPaths.second)
+            base.copy(
+                postcardCoverPath = coverPaths.postcardPath,
+                ticketCoverPath = coverPaths.ticketPath,
+                ticketDominantColorArgb = coverPaths.ticketDominantColorArgb,
+                ticketColorVersion = coverPaths.ticketColorVersion,
+            )
         }
 
     suspend fun ensureThumbnails(context: Context, galleryKey: String, photos: List<Photo>): List<Photo> =
@@ -183,21 +329,52 @@ object PhotoRepository {
     suspend fun deletePhoto(context: Context, galleryTreeUri: Uri, photo: Photo): DeleteResult =
         withContext(Dispatchers.IO) {
             val uri = photo.uri
+            val mediaUri = uri.toMediaStoreUri(context)
             try {
                 when {
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && mediaUri != null -> {
+                        if (MediaStore.canManageMedia(context)) {
+                            val values = ContentValues().apply {
+                                put(MediaStore.MediaColumns.IS_TRASHED, 1)
+                            }
+                            val movedToTrash = runCatching {
+                                context.contentResolver.update(mediaUri, values, null, null)
+                            }.getOrDefault(0) > 0
+                            if (movedToTrash) {
+                                DeleteResult.Deleted
+                            } else {
+                                DeleteResult.NeedsUserAction(
+                                    MediaStore.createTrashRequest(
+                                        context.contentResolver,
+                                        listOf(mediaUri),
+                                        true,
+                                    ),
+                                )
+                            }
+                        } else {
+                            DeleteResult.NeedsUserAction(
+                                MediaStore.createTrashRequest(
+                                    context.contentResolver,
+                                    listOf(mediaUri),
+                                    true,
+                                ),
+                            )
+                        }
+                    }
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mediaUri != null -> {
+                        val pending = MediaStore.createTrashRequest(
+                            context.contentResolver,
+                            listOf(mediaUri),
+                            true,
+                        )
+                        DeleteResult.NeedsUserAction(pending)
+                    }
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> DeleteResult.Failed
                     DocumentsContract.isDocumentUri(context, uri) ->
                         if (DocumentsContract.deleteDocument(context.contentResolver, uri)) DeleteResult.Deleted
                         else DeleteResult.Failed
                     deleteFromAuthorizedTree(context, galleryTreeUri, photo) -> DeleteResult.Deleted
                     DocumentFile.fromSingleUri(context, uri)?.delete() == true -> DeleteResult.Deleted
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
-                        val pending = MediaStore.createTrashRequest(
-                            context.contentResolver,
-                            listOf(uri),
-                            true,
-                        )
-                        DeleteResult.NeedsUserAction(pending)
-                    }
                     context.contentResolver.delete(uri, null, null) > 0 -> DeleteResult.Deleted
                     else -> DeleteResult.Failed
                 }
@@ -205,6 +382,74 @@ object PhotoRepository {
                 DeleteResult.Failed
             }
         }
+
+    suspend fun movePhoto(
+        context: Context,
+        photo: Photo,
+        destination: SystemAlbum,
+    ): MoveResult =
+        withContext(Dispatchers.IO) {
+            val destPath = normalizeRelativePath(destination.relativePath)
+            if (destPath.isBlank()) return@withContext MoveResult.Failed
+            val mediaUri = photo.uri.toMediaStoreUri(context) ?: return@withContext MoveResult.Failed
+            try {
+                val currentPath = queryRelativePath(context, mediaUri)
+                if (currentPath != null &&
+                    normalizeRelativePath(currentPath) == destPath
+                ) {
+                    return@withContext MoveResult.SameAlbum
+                }
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, destPath)
+                }
+                val updated = runCatching {
+                    context.contentResolver.update(mediaUri, values, null, null)
+                }.getOrDefault(0)
+                when {
+                    updated > 0 -> MoveResult.Moved
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
+                        MoveResult.NeedsUserAction(
+                            MediaStore.createWriteRequest(context.contentResolver, listOf(mediaUri)),
+                        )
+                    else -> MoveResult.Failed
+                }
+            } catch (_: SecurityException) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    MoveResult.NeedsUserAction(
+                        MediaStore.createWriteRequest(context.contentResolver, listOf(mediaUri)),
+                    )
+                } else {
+                    MoveResult.Failed
+                }
+            } catch (_: Exception) {
+                MoveResult.Failed
+            }
+        }
+
+    private fun queryRelativePath(context: Context, mediaUri: Uri): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        return try {
+            context.contentResolver.query(
+                mediaUri,
+                arrayOf(MediaStore.MediaColumns.RELATIVE_PATH),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                cursor.getString(0)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun Uri.toMediaStoreUri(context: Context): Uri? = when {
+        isMediaStoreUri(this) -> this
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+            runCatching { MediaStore.getMediaUri(context, this) }.getOrNull()
+        else -> null
+    }
 
     private fun deleteFromAuthorizedTree(context: Context, treeUri: Uri, photo: Photo): Boolean {
         return try {
@@ -236,6 +481,43 @@ object PhotoRepository {
         }
     }
 
+    private suspend fun sortFilesByCaptureTime(
+        context: Context,
+        files: List<PhotoFile>,
+        cachedPhotos: List<Photo>,
+    ): List<Pair<PhotoFile, Long>> {
+        val cachedByUri = cachedPhotos.associateBy { it.uri.toString() }
+        val cachedBySignature = cachedPhotos.associateBy {
+            "${it.name}|${it.fileSizeBytes}"
+        }
+        return coroutineScope {
+            files.map { file ->
+                async {
+                    val cached = cachedByUri[file.uri.toString()]
+                        ?: cachedBySignature["${file.name}|${file.sizeBytes}"]
+                    val cachedTakenMillis = cached
+                        ?.takeIf {
+                            cachedMatchesFile(it, file) &&
+                                it.metadataVersion >= METADATA_VERSION
+                        }
+                        ?.takenMillis
+                        ?.takeIf { it > 0L }
+                    val fallback = file.takenMillis ?: file.modifiedMillis
+                    file to (
+                        cachedTakenMillis
+                            ?: exifReadSemaphore.withPermit {
+                                readTakenMillis(context, file.uri, fallback)
+                            }
+                        )
+                }
+            }.awaitAll()
+        }.sortedWith(
+            compareByDescending<Pair<PhotoFile, Long>> { it.second }
+                .thenByDescending { it.first.modifiedMillis }
+                .thenBy { it.first.uri.toString() },
+        )
+    }
+
     private fun readTakenMillis(context: Context, uri: Uri, fallback: Long): Long {
         return try {
             openExifInputStream(context, uri)?.use { s ->
@@ -258,6 +540,9 @@ object PhotoRepository {
         fileSizeBytes: Long,
         modifiedMillis: Long,
         thumbnailPath: String?,
+        motionPhotoVideoLength: Long = 0L,
+        motionPhotoPresentationTimestampUs: Long = 0L,
+        motionPhotoChecked: Boolean = false,
     ): Photo {
         var width = 0
         var height = 0
@@ -270,6 +555,10 @@ object PhotoRepository {
         var focal: String? = null
         var device: String? = null
         var lens: String? = null
+        var resolvedMotionPhotoVideoLength = motionPhotoVideoLength
+        var resolvedMotionPhotoPresentationTimestampUs =
+            motionPhotoPresentationTimestampUs
+        var resolvedMotionPhotoChecked = motionPhotoChecked
 
         val gpsReadAttempted = canReadUnredactedGps(context, uri)
 
@@ -332,6 +621,10 @@ object PhotoRepository {
             fileSizeBytes = fileSizeBytes,
             modifiedMillis = modifiedMillis,
             thumbnailPath = thumbnailPath,
+            motionPhotoVideoLength = resolvedMotionPhotoVideoLength,
+            motionPhotoPresentationTimestampUs =
+                resolvedMotionPhotoPresentationTimestampUs,
+            motionPhotoChecked = resolvedMotionPhotoChecked,
             metadataVersion = METADATA_VERSION,
         )
     }
@@ -369,7 +662,19 @@ object PhotoRepository {
         val modifiedMillis: Long,
         val sizeBytes: Long,
         val takenMillis: Long?,
+        val motionPhotoVideoLength: Long = 0L,
+        val motionPhotoPresentationTimestampUs: Long = 0L,
+        val motionPhotoChecked: Boolean = false,
     )
+
+    private fun cachedMatchesFile(cached: Photo, file: PhotoFile): Boolean {
+        if (cached.fileSizeBytes != file.sizeBytes || cached.name != file.name) return false
+        return if (cached.uri == file.uri) {
+            cached.modifiedMillis == file.modifiedMillis
+        } else {
+            abs(cached.modifiedMillis - file.modifiedMillis) <= FILE_TIME_TOLERANCE_MILLIS
+        }
+    }
 
     private fun scanSaf(context: Context, treeUri: Uri): List<PhotoFile> {
         val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return emptyList()
@@ -389,14 +694,139 @@ object PhotoRepository {
     }
 
     private fun scanFiles(context: Context, treeUri: Uri): List<PhotoFile> {
+        if (SystemAlbum.isAlbumUri(treeUri)) {
+            val bucketId = SystemAlbum.bucketId(treeUri) ?: return emptyList()
+            return scanMediaStoreByBucket(context, bucketId)
+        }
         val media = scanMediaStore(context, treeUri)
-        if (hasFullMediaAccess(context) && media.isNotEmpty()) return media
+        // 完整媒体权限下，以 MediaStore 为唯一有效集合；其默认排除了系统回收站内容。
+        if (hasFullMediaAccess(context)) return media
+
         val saf = scanSaf(context, treeUri)
-        return when {
-            media.isEmpty() -> saf
-            saf.isEmpty() -> media
-            media.size < saf.size -> saf
-            else -> media
+        if (saf.isEmpty()) return media
+        if (media.isEmpty()) return saf
+
+        // SAF URI 是用户持久授权后的稳定身份；MediaStore 只用于补充拍摄时间。
+        // 避免同一文件在两种 URI 之间切换，导致封面键每次启动都变化。
+        val mediaByNameAndSize = media.groupBy { "${it.name}|${it.sizeBytes}" }
+        return saf.map { safFile ->
+            val matchedMedia = mediaByNameAndSize["${safFile.name}|${safFile.sizeBytes}"]
+                ?.minByOrNull { abs(it.modifiedMillis - safFile.modifiedMillis) }
+            safFile.copy(
+                takenMillis = matchedMedia?.takenMillis,
+                motionPhotoVideoLength = matchedMedia?.motionPhotoVideoLength ?: 0L,
+                motionPhotoPresentationTimestampUs =
+                    matchedMedia?.motionPhotoPresentationTimestampUs ?: 0L,
+                motionPhotoChecked = matchedMedia?.motionPhotoChecked == true,
+            )
+        }
+    }
+
+    private fun scanMediaStore(context: Context, treeUri: Uri): List<PhotoFile> {
+        val relativePrefix = treeUri.toMediaStoreRelativePath() ?: return emptyList()
+        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val selection = "${MediaStore.Images.Media.RELATIVE_PATH} = ?"
+        return queryMediaStore(context, collection, selection, arrayOf(relativePrefix), true)
+            ?: queryMediaStore(context, collection, selection, arrayOf(relativePrefix), false)
+            ?: emptyList()
+    }
+
+    private fun scanMediaStoreByBucket(context: Context, bucketId: Long): List<PhotoFile> {
+        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val selection = "${MediaStore.Images.Media.BUCKET_ID} = ?"
+        val args = arrayOf(bucketId.toString())
+        return queryMediaStore(context, collection, selection, args, true)
+            ?: queryMediaStore(context, collection, selection, args, false)
+            ?: emptyList()
+    }
+
+    private fun queryMediaStore(
+        context: Context,
+        collection: Uri,
+        selection: String,
+        selectionArgs: Array<String>,
+        includeOplusMotion: Boolean,
+    ): List<PhotoFile>? {
+        val baseProjection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_MODIFIED,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.RELATIVE_PATH,
+        )
+        val projection = if (includeOplusMotion) {
+            baseProjection + arrayOf(
+                OPLUS_IS_LIVE_PHOTO,
+                OPLUS_VIDEO_SIZE,
+                OPLUS_COVER_TIMESTAMP_US,
+            )
+        } else {
+            baseProjection
+        }
+        val result = mutableListOf<PhotoFile>()
+        return try {
+            val cursor = context.contentResolver.query(
+                collection,
+                projection,
+                selection,
+                selectionArgs,
+                "${MediaStore.Images.Media.DATE_TAKEN} DESC, " +
+                    "${MediaStore.Images.Media.DATE_MODIFIED} DESC, " +
+                    "${MediaStore.Images.Media._ID} DESC",
+            ) ?: return null
+            cursor.use {
+                val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
+                val takenIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+                val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+                val isLiveIndex = if (includeOplusMotion) {
+                    cursor.getColumnIndexOrThrow(OPLUS_IS_LIVE_PHOTO)
+                } else {
+                    -1
+                }
+                val videoSizeIndex = if (includeOplusMotion) {
+                    cursor.getColumnIndexOrThrow(OPLUS_VIDEO_SIZE)
+                } else {
+                    -1
+                }
+                val coverTimestampIndex = if (includeOplusMotion) {
+                    cursor.getColumnIndexOrThrow(OPLUS_COVER_TIMESTAMP_US)
+                } else {
+                    -1
+                }
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idIndex)
+                    val uri = ContentUris.withAppendedId(collection, id)
+                    val taken = cursor.getLong(takenIndex).takeIf { it > 0L }
+                    val isLivePhoto =
+                        includeOplusMotion && cursor.getLong(isLiveIndex) == 1L
+                    val videoLength = if (isLivePhoto) {
+                        cursor.getLong(videoSizeIndex).coerceAtLeast(0L)
+                    } else {
+                        0L
+                    }
+                    result += PhotoFile(
+                        uri = uri,
+                        name = cursor.getString(nameIndex) ?: "未命名",
+                        modifiedMillis = cursor.getLong(modifiedIndex) * 1000L,
+                        sizeBytes = cursor.getLong(sizeIndex),
+                        takenMillis = taken,
+                        motionPhotoVideoLength = videoLength,
+                        motionPhotoPresentationTimestampUs = if (isLivePhoto) {
+                            cursor.getLong(coverTimestampIndex).coerceAtLeast(0L)
+                        } else {
+                            0L
+                        },
+                        motionPhotoChecked =
+                            includeOplusMotion && (!isLivePhoto || videoLength > 0L),
+                    )
+                }
+            }
+            result
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -407,51 +837,11 @@ object PhotoRepository {
                 Manifest.permission.READ_MEDIA_IMAGES,
             ) == PackageManager.PERMISSION_GRANTED
 
-    private fun scanMediaStore(context: Context, treeUri: Uri): List<PhotoFile> {
-        val relativePrefix = treeUri.toMediaStoreRelativePath() ?: return emptyList()
-        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.DATE_MODIFIED,
-            MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.RELATIVE_PATH,
-        )
-        val result = mutableListOf<PhotoFile>()
-        return try {
-            context.contentResolver.query(
-                collection,
-                projection,
-                "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?",
-                arrayOf("$relativePrefix%"),
-                "${MediaStore.Images.Media.DATE_TAKEN} DESC",
-            )?.use { cursor ->
-                val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-                val modifiedIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
-                val takenIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
-                val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idIndex)
-                    val uri = ContentUris.withAppendedId(collection, id)
-                    val taken = cursor.getLong(takenIndex).takeIf { it > 0L }
-                    result += PhotoFile(
-                        uri = uri,
-                        name = cursor.getString(nameIndex) ?: "未命名",
-                        modifiedMillis = cursor.getLong(modifiedIndex) * 1000L,
-                        sizeBytes = cursor.getLong(sizeIndex),
-                        takenMillis = taken,
-                    )
-                }
-            }
-            result
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
     private fun Uri.toMediaStoreRelativePath(): String? {
+        if (SystemAlbum.isAlbumUri(this)) {
+            val path = getQueryParameter("path")?.trim('/') ?: return null
+            return if (path.isBlank()) null else "$path/"
+        }
         val docId = try {
             DocumentsContract.getTreeDocumentId(this)
         } catch (e: Exception) {
@@ -463,6 +853,37 @@ object PhotoRepository {
             else -> return null
         }.trim('/')
         return if (path.isBlank()) null else "$path/"
+    }
+
+    private fun isDcimOrPicturesPath(relativePath: String): Boolean {
+        val path = relativePath.replace('\\', '/').trimStart('/')
+        return path.startsWith("DCIM/", ignoreCase = true) ||
+            path.equals("DCIM", ignoreCase = true) ||
+            path.startsWith("Pictures/", ignoreCase = true) ||
+            path.equals("Pictures", ignoreCase = true)
+    }
+
+    private fun normalizeRelativePath(relativePath: String): String {
+        val path = relativePath.replace('\\', '/').trim('/')
+        return if (path.isBlank()) "" else "$path/"
+    }
+
+    private fun folderNameFromRelativePath(relativePath: String): String {
+        val trimmed = relativePath.replace('\\', '/').trim('/')
+        return trimmed.substringAfterLast('/').ifBlank { trimmed.ifBlank { "未命名图集" } }
+    }
+
+    private fun relativePathFromData(dataPath: String?): String? {
+        if (dataPath.isNullOrBlank()) return null
+        val normalized = dataPath.replace('\\', '/')
+        val markers = listOf("/DCIM/", "/Pictures/")
+        val marker = markers.firstOrNull { marker ->
+            normalized.contains(marker, ignoreCase = true)
+        } ?: return null
+        val index = normalized.indexOf(marker, ignoreCase = true)
+        val fromRoot = normalized.substring(index + 1)
+        val folder = fromRoot.substringBeforeLast('/', missingDelimiterValue = fromRoot)
+        return if (folder.endsWith('/')) folder else "$folder/"
     }
 
     private fun parseExifMillis(raw: String?): Long? {
@@ -497,6 +918,11 @@ object PhotoRepository {
         }
     }
 
+    private val PHOTO_NEWEST_FIRST =
+        compareByDescending<Photo> { it.takenMillis }
+            .thenByDescending { it.modifiedMillis }
+            .thenBy { it.uri.toString() }
+
     private fun formatDate(millis: Long): String? {
         if (millis <= 0L) return null
         return SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.US).format(Date(millis))
@@ -526,5 +952,9 @@ object PhotoRepository {
         else String.format(Locale.US, "%.1f", value)
 
     private const val COVER_COUNT = 4
-    private const val METADATA_VERSION = 2
+    private const val METADATA_VERSION = 3
+    private const val FILE_TIME_TOLERANCE_MILLIS = 1_500L
+    private const val OPLUS_IS_LIVE_PHOTO = "o_is_live_photo"
+    private const val OPLUS_VIDEO_SIZE = "o_video_size"
+    private const val OPLUS_COVER_TIMESTAMP_US = "o_cover_time_stamps"
 }

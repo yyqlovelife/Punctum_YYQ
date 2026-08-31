@@ -24,7 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Collections
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -52,7 +53,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.request.ImageRequest
-import java.io.File
+import com.punctum.gallery.data.PhotoStill
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.model.GalleryStyle
@@ -154,7 +155,11 @@ internal fun GalleryScreen(
 
             else -> items(
                 count = (photos.size + 1) / 2,
-                key = { rowIndex -> photos[rowIndex * 2].uri.toString() },
+                key = { rowIndex ->
+                    val first = photos[rowIndex * 2].uri.toString()
+                    val second = photos.getOrNull(rowIndex * 2 + 1)?.uri?.toString().orEmpty()
+                    "$first|$second"
+                },
             ) { rowIndex ->
                 val rowStartIndex = rowIndex * 2
                 val row = photos.subList(
@@ -174,6 +179,7 @@ internal fun GalleryScreen(
                             if (updated.containsAll(firstRowUris)) onContentReady()
                         }
                     },
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
@@ -191,19 +197,26 @@ private fun OriginalRatioRow(
     onSelectPhoto: (Int) -> Unit,
     onDeletePhoto: (Photo) -> Unit,
     onPhotoReady: (Photo) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val hapticFeedback = LocalHapticFeedback.current
-    Row(modifier = Modifier.fillMaxWidth()) {
+    Row(modifier = modifier.fillMaxWidth()) {
         row.forEachIndexed { offset, photo ->
+            key(photo.uri) {
             val aspect = photo.aspectRatio.coerceIn(0.45f, 2.4f)
             val deleteProgress = remember(photo.uri) { Animatable(0f) }
             var showDeleteProgress by remember(photo.uri) { mutableStateOf(false) }
-            val imageModel = remember(photo.uri, photo.thumbnailPath) {
+            val imageModel = remember(
+                photo.uri,
+                photo.thumbnailPath,
+                photo.stillImageByteCount,
+            ) {
                 ImageRequest.Builder(context)
-                    .data(photo.thumbnailPath?.let { File(it) }?.takeIf { it.exists() } ?: photo.uri)
+                    .data(PhotoStill.forList(photo))
                     .memoryCacheKey("gallery-thumb:${photo.uri}")
                     .diskCacheKey("gallery-thumb:${photo.uri}")
+                    .placeholderMemoryCacheKey("gallery-thumb:${photo.uri}")
                     .size(900)
                     .crossfade(false)
                     .build()
@@ -274,6 +287,7 @@ private fun OriginalRatioRow(
                         DeleteProgressBadge(progress = deleteProgress.value)
                     }
                 }
+            }
             }
         }
         if (row.size == 1) {
@@ -347,8 +361,8 @@ private fun GalleryHeader(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    Icons.Outlined.Collections,
-                    contentDescription = "切换画廊",
+                    Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = "返回",
                     tint = Muted,
                     modifier = Modifier.size(16.dp),
                 )

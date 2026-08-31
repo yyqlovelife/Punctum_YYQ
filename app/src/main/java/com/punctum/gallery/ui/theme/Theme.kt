@@ -30,11 +30,12 @@ private val PunctumColors = darkColorScheme(
     outline = Hairline,
 )
 
-val Georgia = FontFamily(
-    Font(R.font.georgia_regular, FontWeight.Normal),
-    Font(R.font.georgia_bold, FontWeight.Medium),
-    Font(R.font.georgia_bold, FontWeight.SemiBold),
-    Font(R.font.georgia_bold, FontWeight.Bold),
+/** 英文 UI 与大图页：Newsreader，默认 lining figures，接近 LFI 的 Chronicle Text G2。 */
+val DetailSerif = FontFamily(
+    Font(R.font.newsreader_regular, FontWeight.Normal),
+    Font(R.font.newsreader_semibold, FontWeight.Medium),
+    Font(R.font.newsreader_semibold, FontWeight.SemiBold),
+    Font(R.font.newsreader_semibold, FontWeight.Bold),
 )
 
 val NotoSerifSc = FontFamily(
@@ -44,14 +45,14 @@ val NotoSerifSc = FontFamily(
 )
 
 fun galleryTitleFont(text: String): FontFamily =
-    if (text.any { it.code in 0x4E00..0x9FFF }) NotoSerifSc else Georgia
+    if (text.any { it.code in 0x4E00..0x9FFF }) NotoSerifSc else DetailSerif
 
 private val PunctumType = Typography(
     displayMedium = TextStyle(
-        fontFamily = Georgia, fontWeight = FontWeight.SemiBold, fontSize = 44.sp, letterSpacing = 0.sp
+        fontFamily = DetailSerif, fontWeight = FontWeight.SemiBold, fontSize = 44.sp, letterSpacing = 0.sp
     ),
     headlineMedium = TextStyle(
-        fontFamily = Georgia, fontWeight = FontWeight.Medium, fontSize = 29.sp, letterSpacing = 0.sp
+        fontFamily = DetailSerif, fontWeight = FontWeight.Medium, fontSize = 29.sp, letterSpacing = 0.sp
     ),
     titleLarge = TextStyle(
         fontFamily = NotoSerifSc, fontWeight = FontWeight.Medium, fontSize = 20.sp, letterSpacing = 0.2.sp
@@ -60,7 +61,7 @@ private val PunctumType = Typography(
         fontFamily = NotoSerifSc, fontWeight = FontWeight.Normal, fontSize = 15.sp, letterSpacing = 0.1.sp
     ),
     labelSmall = TextStyle(
-        fontFamily = Georgia, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, letterSpacing = 1.2.sp
+        fontFamily = DetailSerif, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, letterSpacing = 1.2.sp
     ),
 )
 

@@ -10,5 +10,7 @@ data class GalleryOverview(
     val coverUris: List<Uri> = emptyList(),
     val postcardCoverPath: String? = null,
     val ticketCoverPath: String? = null,
+    val ticketDominantColorArgb: Int? = null,
+    val ticketColorVersion: Int = 0,
     val loading: Boolean = true,
 )

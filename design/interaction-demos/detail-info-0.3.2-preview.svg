@@ -1,0 +1,43 @@
+<svg width="1080" height="2400" viewBox="0 0 1080 2400" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1080" height="2400" fill="#050505"/>
+
+  <text x="64" y="102" fill="#EAE4D7" font-family="Georgia, 'Times New Roman', serif" font-size="34" font-weight="600" letter-spacing="0.5">09:41</text>
+  <text x="934" y="102" fill="#EAE4D7" font-family="Georgia, 'Times New Roman', serif" font-size="30" font-weight="600">100</text>
+
+  <rect x="0" y="158" width="1080" height="910" fill="#050505"/>
+  <rect x="74" y="230" width="932" height="699" fill="#151515"/>
+  <defs>
+    <linearGradient id="photoGrad" x1="74" y1="230" x2="1006" y2="929" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1E2B3B"/>
+      <stop offset="0.46" stop-color="#425A72"/>
+      <stop offset="0.47" stop-color="#D7B067"/>
+      <stop offset="0.58" stop-color="#2E241B"/>
+      <stop offset="1" stop-color="#080808"/>
+    </linearGradient>
+  </defs>
+  <rect x="74" y="230" width="932" height="699" fill="url(#photoGrad)"/>
+  <path d="M74 716 C250 620 356 650 486 556 C611 466 718 524 1006 378 L1006 929 L74 929 Z" fill="#090807" opacity="0.78"/>
+  <path d="M188 659 C310 557 422 623 520 495 C623 358 764 514 903 405 C957 363 980 352 1006 347 L1006 555 C866 608 710 592 566 620 C421 648 307 720 188 659 Z" fill="#E7C27B" opacity="0.85"/>
+  <path d="M188 659 C310 557 422 623 520 495 C623 358 764 514 903 405 C957 363 980 352 1006 347 L1006 463 C837 478 673 465 532 542 C405 611 310 696 188 659 Z" fill="#EEE8DC" opacity="0.5"/>
+
+  <g font-family="Georgia, 'Times New Roman', serif" fill="#EAE4D7">
+    <text x="78" y="1214" font-size="37" font-weight="600" letter-spacing="0.2">No.18</text>
+
+    <text x="78" y="1292" font-size="25" letter-spacing="0.1">2026.06.06 09:38</text>
+    <text x="78" y="1330" font-size="25" letter-spacing="0.1">上海 · 徐汇区</text>
+
+    <text x="78" y="1425" font-size="25">Camera: Leica M11</text>
+    <text x="78" y="1461" font-size="25">Shutter: 1/500 s</text>
+    <text x="78" y="1497" font-size="25">Focal: 35 mm</text>
+    <text x="78" y="1533" font-size="25">Aperture: F2.0</text>
+    <text x="78" y="1569" font-size="25">ISO: ISO 200</text>
+    <text x="78" y="1605" font-size="25">Resolution: 7952 × 5304</text>
+    <text x="78" y="1641" font-size="25">File Size: 18.4 MB</text>
+  </g>
+
+  <g opacity="0.58" font-family="Georgia, 'Times New Roman', serif" fill="#9B9182">
+    <text x="78" y="1748" font-size="21" letter-spacing="0.2">Preview for Punctum 0.3.2 detail metadata layout</text>
+  </g>
+
+  <rect x="394" y="2314" width="292" height="8" rx="4" fill="#EAE4D7" opacity="0.68"/>
+</svg>

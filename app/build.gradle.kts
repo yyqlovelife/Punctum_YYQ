@@ -19,8 +19,8 @@ android {
         applicationId = "com.punctum.gallery"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
-        versionName = "0.3.2"
+        versionCode = 53
+        versionName = "0.5.3"
         vectorDrawables { useSupportLibrary = true }
     }
 

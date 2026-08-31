@@ -1,0 +1,14 @@
+---
+description: 升版本号时必须同步写 Android / iOS 更新说明
+alwaysApply: true
+---
+
+# 版本号与更新说明
+
+用户要求升级、对齐或发布版本号时：
+
+1. 改对应端版本号。Android 在 `app/build.gradle.kts`（`versionName`、`versionCode`）。iOS 在 `iOS/Punctum/project.yml`（`MARKETING_VERSION`、`CURRENT_PROJECT_VERSION`），改完后在 `iOS/Punctum` 执行 `xcodegen generate`。
+2. 在 `changelog/android.md` 或 `changelog/ios.md` **顶部**新增一节，格式 `## 0.x.y · YYYY-MM-DD`。写用户能感知的变化，不要只列文件。
+3. 更新根目录 `CHANGELOG.md` 的当前版本索引。
+
+约定全文见 `changelog/README.md`。两端版本号默认对齐；build / versionCode 与版本号末两位一致（如 `0.5.1` → `51`）。未升版本的日常改动等下次升版本时并进那一节。
