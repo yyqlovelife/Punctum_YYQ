@@ -8,9 +8,16 @@ actor MetadataService {
     static let shared = MetadataService()
 
     private var cache: [String: PhotoMetadata] = [:]
+    private var metadataWaiters: [String: [CheckedContinuation<PhotoMetadata, Never>]] = [:]
 
     func metadata(for photo: PhotoItem) async -> PhotoMetadata {
         if let cached = cache[photo.id] { return cached }
+        if metadataWaiters[photo.id] != nil {
+            return await withCheckedContinuation { continuation in
+                metadataWaiters[photo.id, default: []].append(continuation)
+            }
+        }
+        metadataWaiters[photo.id] = []
 
         let original = try? await originalData(for: photo)
         let properties: [CFString: Any]
@@ -33,17 +40,13 @@ actor MetadataService {
         let exifTaken = (exif[kCGImagePropertyExifDateTimeOriginal] as? String)
             .flatMap(PunctumFormatting.detailDate(fromExif:))
 
-        var placeName: String?
-        if let location = photo.asset.location {
-            placeName = await reverseGeocode(location)
-        }
         let coordinate = photo.asset.location.map {
             String(format: "%.5f, %.5f", $0.coordinate.latitude, $0.coordinate.longitude)
         }
 
         let value = PhotoMetadata(
             dateTaken: exifTaken ?? PunctumFormatting.detailDate(photo.creationDate),
-            location: placeName,
+            location: nil,
             coordinate: coordinate,
             camera: camera,
             exposureTime: PunctumFormatting.exposure(seconds: exposure),
@@ -54,7 +57,20 @@ actor MetadataService {
             fileSize: PunctumFormatting.fileSize(original?.data.count ?? 0)
         )
         cache[photo.id] = value
+        let waiters = metadataWaiters.removeValue(forKey: photo.id) ?? []
+        waiters.forEach { $0.resume(returning: value) }
         return value
+    }
+
+    func locationName(for photo: PhotoItem) async -> String? {
+        if let location = cache[photo.id]?.location { return location }
+        guard let location = photo.asset.location else { return nil }
+        guard let name = await reverseGeocode(location) else { return nil }
+        if var value = cache[photo.id] {
+            value.location = name
+            cache[photo.id] = value
+        }
+        return name
     }
 
     func originalData(for photo: PhotoItem) async throws -> (data: Data, filename: String, uniformType: String?) {

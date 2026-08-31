@@ -667,6 +667,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             "按下快门的勇气，比技巧更珍贵",
             "光轨划过暗房，向流星写下情书",
             "镜头，比情话更擅长说永远",
+            "观止，关心每一幅照片被重新看见的时刻",
+            "每一次回望，都重新感受影像的重量",
         )
     }
 }

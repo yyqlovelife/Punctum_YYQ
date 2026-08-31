@@ -144,10 +144,10 @@ internal fun SwitcherScreen(
         ) {
             SectionLabel("SELECT EXHIBITION")
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = onToggleInvitationStyle) {
+            PressFeedbackIconButton(onClick = onToggleInvitationStyle) {
                 Icon(Icons.Outlined.Style, contentDescription = "切换邀请卡风格", tint = Muted)
             }
-            IconButton(onClick = { showSortDialog = true }) {
+            PressFeedbackIconButton(onClick = { showSortDialog = true }) {
                 Icon(Icons.Outlined.Sort, contentDescription = "调整排序", tint = Muted)
             }
             if (canClose) {
@@ -377,10 +377,15 @@ private fun ReversalFilmCard(
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(1f)
+            .punctumPressable(
+                pressedScale = 0.985f,
+                pressedOffsetY = 4.dp,
+                pressedAlpha = 0.96f,
+                onClick = onClick,
+            )
             .shadow(5.dp * visualScale, cardShape, clip = false)
             .clip(cardShape)
-            .background(ReversalFilmPaper)
-            .clickable(onClick = onClick),
+            .background(ReversalFilmPaper),
     ) {
         Image(
             painter = painterResource(R.drawable.reversal_film_paper_texture),
@@ -554,9 +559,14 @@ private fun PostcardInvitationCard(
         modifier = Modifier
             .width(width)
             .height(cardHeight)
+            .punctumPressable(
+                pressedScale = 0.985f,
+                pressedOffsetY = 4.dp,
+                pressedAlpha = 0.96f,
+                onClick = onClick,
+            )
             .background(paper)
-            .border(1.dp, Color.Black.copy(alpha = 0.12f))
-            .clickable(onClick = onClick),
+            .border(1.dp, Color.Black.copy(alpha = 0.12f)),
     ) {
         PostcardPunctumsWatermark(
             modifier = Modifier
@@ -713,8 +723,13 @@ private fun TicketInvitationCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(TicketCardHeight)
-            .background(TicketPaper)
-            .clickable(onClick = onClick),
+            .punctumPressable(
+                pressedScale = 0.985f,
+                pressedOffsetY = 4.dp,
+                pressedAlpha = 0.96f,
+                onClick = onClick,
+            )
+            .background(TicketPaper),
     ) {
         val ticketWidth = maxWidth
         val rightWidth = if (ticketWidth < 340.dp) 72.dp else 78.dp

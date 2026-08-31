@@ -7,8 +7,10 @@ import UIKit
 enum LiveAudioSession {
     static func activate() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default)
-        try? session.setActive(true)
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+        } catch { }
     }
 }
 
@@ -34,6 +36,7 @@ struct LivePhotoHost: UIViewRepresentable {
         view.contentMode = .scaleAspectFit
         view.backgroundColor = .clear
         view.isMuted = false
+        view.isUserInteractionEnabled = true
         view.playbackGestureRecognizer.isEnabled = false
         view.livePhoto = livePhoto
         return view
@@ -43,6 +46,7 @@ struct LivePhotoHost: UIViewRepresentable {
         context.coordinator.onDidBeginPlayback = onDidBeginPlayback
         context.coordinator.onDidEndPlayback = onDidEndPlayback
         context.coordinator.mode = mode
+        view.isUserInteractionEnabled = true
         view.playbackGestureRecognizer.isEnabled = false
         let photoChanged = view.livePhoto !== livePhoto
         if photoChanged {
@@ -51,6 +55,7 @@ struct LivePhotoHost: UIViewRepresentable {
         }
         switch mode {
         case .none:
+            context.coordinator.cancelPendingPlayback()
             if context.coordinator.appliedMode != .none {
                 view.isMuted = true
                 view.stopPlayback()
@@ -59,14 +64,7 @@ struct LivePhotoHost: UIViewRepresentable {
         case .hold, .playOnce:
             guard view.livePhoto != nil else { return }
             guard photoChanged || context.coordinator.appliedMode != mode else { return }
-            context.coordinator.appliedMode = mode
-            view.isMuted = false
-            LiveAudioSession.activate()
-            DispatchQueue.main.async {
-                guard view.livePhoto != nil else { return }
-                view.isMuted = false
-                view.startPlayback(with: .full)
-            }
+            context.coordinator.beginPlayback(on: view, mode: mode)
         }
     }
 
@@ -75,16 +73,62 @@ struct LivePhotoHost: UIViewRepresentable {
         var appliedMode: LivePlaybackMode = .none
         var onDidBeginPlayback: () -> Void
         var onDidEndPlayback: () -> Void
+        private var playbackGeneration = 0
+        private var pendingPlaybackItems: [DispatchWorkItem] = []
+        private var playbackDidBegin = false
 
         init(onDidBeginPlayback: @escaping () -> Void, onDidEndPlayback: @escaping () -> Void) {
             self.onDidBeginPlayback = onDidBeginPlayback
             self.onDidEndPlayback = onDidEndPlayback
         }
 
+        func beginPlayback(on livePhotoView: PHLivePhotoView, mode requestedMode: LivePlaybackMode) {
+            cancelPendingPlayback()
+            appliedMode = requestedMode
+            playbackDidBegin = false
+            let generation = playbackGeneration
+            LiveAudioSession.activate()
+
+            // PHLivePhotoView may need one run-loop turn after receiving a new
+            // PHLivePhoto. A guarded retry covers slower iCloud-backed assets.
+            schedulePlayback(on: livePhotoView, mode: requestedMode, generation: generation, delay: 0.04)
+            schedulePlayback(on: livePhotoView, mode: requestedMode, generation: generation, delay: 0.28)
+        }
+
+        func cancelPendingPlayback() {
+            playbackGeneration += 1
+            pendingPlaybackItems.forEach { $0.cancel() }
+            pendingPlaybackItems.removeAll()
+            playbackDidBegin = false
+        }
+
+        private func schedulePlayback(
+            on livePhotoView: PHLivePhotoView,
+            mode requestedMode: LivePlaybackMode,
+            generation: Int,
+            delay: TimeInterval
+        ) {
+            let item = DispatchWorkItem { [weak self, weak livePhotoView] in
+                guard let self, let livePhotoView,
+                      !self.playbackDidBegin,
+                      self.playbackGeneration == generation,
+                      self.mode == requestedMode,
+                      self.appliedMode == requestedMode,
+                      livePhotoView.livePhoto != nil else { return }
+                livePhotoView.isMuted = false
+                livePhotoView.startPlayback(with: .full)
+            }
+            pendingPlaybackItems.append(item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        }
+
         func livePhotoView(
             _ livePhotoView: PHLivePhotoView,
             willBeginPlaybackWith playbackStyle: PHLivePhotoViewPlaybackStyle
         ) {
+            playbackDidBegin = true
+            pendingPlaybackItems.forEach { $0.cancel() }
+            pendingPlaybackItems.removeAll()
             onDidBeginPlayback()
         }
 
@@ -93,8 +137,7 @@ struct LivePhotoHost: UIViewRepresentable {
             didEndPlaybackWith playbackStyle: PHLivePhotoViewPlaybackStyle
         ) {
             if mode == .hold {
-                livePhotoView.isMuted = false
-                livePhotoView.startPlayback(with: .full)
+                beginPlayback(on: livePhotoView, mode: .hold)
                 return
             }
             onDidEndPlayback()
@@ -240,6 +283,7 @@ final class LiveCatcherView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         isOpaque = false
+        isUserInteractionEnabled = true
         backgroundColor = .clear
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
     }

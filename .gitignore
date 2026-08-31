@@ -16,3 +16,4 @@ xcuserdata/
 *.xcuserstate
 /APK/*.apk
 /iOS/IPA/*.ipa
+/IPA/*.ipa

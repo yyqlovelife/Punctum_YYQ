@@ -56,6 +56,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Delete
@@ -546,12 +547,12 @@ internal fun DetailScreen(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Outlined.Close, contentDescription = "返回", tint = Bone)
+                PressFeedbackIconButton(onClick = onClose) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回", tint = Bone)
                 }
                 Spacer(Modifier.weight(1f))
                 currentPhoto?.let { photo ->
-                    IconButton(
+                    PressFeedbackIconButton(
                         onClick = {
                             if (!openPhotoInLightroom(context, photo)) {
                                 showCenterMessage("请下载 Lightroom 后使用编辑")
@@ -560,7 +561,7 @@ internal fun DetailScreen(
                     ) {
                         Icon(Icons.Outlined.Edit, contentDescription = "使用 Lightroom 编辑", tint = Bone)
                     }
-                    IconButton(
+                    PressFeedbackIconButton(
                         enabled = !savingPhoto,
                         onClick = {
                             scope.launch {
@@ -585,7 +586,7 @@ internal fun DetailScreen(
                             tint = if (savingPhoto) Muted else Bone,
                         )
                     }
-                    IconButton(
+                    PressFeedbackIconButton(
                         onClick = { showMovePicker = true },
                         modifier = Modifier.semantics { contentDescription = "移动到其他图集" },
                     ) {

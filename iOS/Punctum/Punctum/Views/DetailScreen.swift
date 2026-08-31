@@ -5,6 +5,7 @@ import UIKit
 struct DetailScreen: View {
     let photos: [PhotoItem]
     let startIndex: Int
+    let initialMetadata: PhotoMetadata?
     let currentGalleryID: String
     let onClose: ([PhotoItem]) -> Void
     let onMoveInLibrary: (PhotoItem, AlbumOption) async throws -> Void
@@ -26,11 +27,16 @@ struct DetailScreen: View {
     @State private var livePlaybackActive = false
     @State private var showMovePicker = false
     @State private var moving = false
-    @State private var deleteSnapshot: UIImage?
+    @State private var deletionSettling = false
+    @State private var frozenDeleteReplacementID: String?
+    @State private var frozenDeleteReplacementDisplayNumber = 1
+    @State private var pageViewGeneration = 0
+    @State private var preparedMetadata: [String: PhotoMetadata]
 
     init(
         photos: [PhotoItem],
         startIndex: Int,
+        initialMetadata: PhotoMetadata? = nil,
         currentGalleryID: String,
         onClose: @escaping ([PhotoItem]) -> Void,
         onMoveInLibrary: @escaping (PhotoItem, AlbumOption) async throws -> Void,
@@ -39,6 +45,7 @@ struct DetailScreen: View {
     ) {
         self.photos = photos
         self.startIndex = startIndex
+        self.initialMetadata = initialMetadata
         self.currentGalleryID = currentGalleryID
         self.onClose = onClose
         self.onMoveInLibrary = onMoveInLibrary
@@ -47,6 +54,11 @@ struct DetailScreen: View {
         let initialIndex = min(max(startIndex, 0), max(photos.count - 1, 0))
         _currentIndex = State(initialValue: initialIndex)
         _selectedPhotoID = State(initialValue: photos.indices.contains(initialIndex) ? photos[initialIndex].id : nil)
+        if let initialMetadata, photos.indices.contains(initialIndex) {
+            _preparedMetadata = State(initialValue: [photos[initialIndex].id: initialMetadata])
+        } else {
+            _preparedMetadata = State(initialValue: [:])
+        }
     }
 
     private var visiblePhotos: [PhotoItem] {
@@ -61,6 +73,25 @@ struct DetailScreen: View {
         visiblePhotos.indices.contains(currentIndex + 1) ? visiblePhotos[currentIndex + 1] : nil
     }
 
+    private var deleteReplacement: (photo: PhotoItem, index: Int)? {
+        if visiblePhotos.indices.contains(currentIndex + 1) {
+            return (visiblePhotos[currentIndex + 1], currentIndex + 1)
+        }
+        if visiblePhotos.indices.contains(currentIndex - 1) {
+            return (visiblePhotos[currentIndex - 1], currentIndex - 1)
+        }
+        return nil
+    }
+
+    private var presentedDeleteReplacement: (photo: PhotoItem, displayNumber: Int)? {
+        if let frozenDeleteReplacementID,
+           let photo = photos.first(where: { $0.id == frozenDeleteReplacementID }) {
+            return (photo, frozenDeleteReplacementDisplayNumber)
+        }
+        guard let replacement = deleteReplacement else { return nil }
+        return (replacement.photo, min(replacement.index, currentIndex) + 1)
+    }
+
     private var armed: Bool { deleteProgress >= 0.72 }
 
     var body: some View {
@@ -72,23 +103,28 @@ struct DetailScreen: View {
             ZStack {
                 PunctumTheme.ink.ignoresSafeArea()
 
-                if deleteProgress > 0, let nextPhoto {
+                if let replacement = presentedDeleteReplacement {
                     DetailPage(
-                        photo: nextPhoto,
-                        displayNumber: min(currentIndex + 2, visiblePhotos.count),
+                        photo: replacement.photo,
+                        displayNumber: replacement.displayNumber,
                         screenSize: screenSize,
                         safeAreaTop: geometry.safeAreaInsets.top,
                         livePlaybackActive: .constant(false),
                         pagingEnabled: false,
+                        isSelected: false,
+                        initialMetadata: preparedMetadata[replacement.photo.id],
+                        interactionLocked: false,
                         onPrevious: {},
                         onNext: {},
                         onToggleControls: {}
                     )
                     .allowsHitTesting(false)
-                    .overlay(Color.black.opacity(0.48 * (1 - revealProgress)))
+                    .accessibilityHidden(true)
+                    .overlay(Color.black.opacity(deletionSettling ? 0 : 0.48 * (1 - revealProgress)))
+                    .opacity(deleteProgress > 0 || deletionSettling ? 1 : 0)
                 }
 
-                if deleteProgress == 0, !visiblePhotos.isEmpty {
+                if !visiblePhotos.isEmpty {
                     TabView(selection: $currentIndex) {
                         ForEach(Array(visiblePhotos.enumerated()), id: \.element.id) { index, photo in
                             DetailPage(
@@ -98,6 +134,9 @@ struct DetailScreen: View {
                                 safeAreaTop: geometry.safeAreaInsets.top,
                                 livePlaybackActive: $livePlaybackActive,
                                 pagingEnabled: true,
+                                isSelected: index == currentIndex,
+                                initialMetadata: preparedMetadata[photo.id],
+                                interactionLocked: deletingGesture || deleteProgress > 0 || deletionSettling,
                                 onPrevious: {
                                     if index > 0 { currentIndex = index - 1 }
                                 },
@@ -112,15 +151,20 @@ struct DetailScreen: View {
                         }
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
-                    .background(PagingScrollLock(locked: livePlaybackActive))
-                } else if deleteProgress > 0 {
-                    deleteLiftView(screenSize: screenSize)
-                        .scaleEffect(pageScale)
-                        .offset(y: pageOffset)
-                        .rotationEffect(.degrees(pageRotation))
-                        .clipShape(RoundedRectangle(cornerRadius: pageRadius, style: .continuous))
-                        .shadow(color: .black.opacity(0.5), radius: 22, y: 12)
-                        .allowsHitTesting(false)
+                    .id(pageViewGeneration)
+                    .background(PagingScrollLock(
+                        locked: deletingGesture || deleteProgress > 0 || deletionSettling
+                    ))
+                    .scaleEffect(pageScale)
+                    .offset(y: pageOffset(screenHeight: screenSize.height))
+                    .rotationEffect(.degrees(pageRotation))
+                    .clipShape(RoundedRectangle(cornerRadius: pageRadius, style: .continuous))
+                    .shadow(
+                        color: .black.opacity(0.42 * baseDeleteProgress),
+                        radius: 18 * baseDeleteProgress,
+                        y: 10 * baseDeleteProgress
+                    )
+                    .opacity(deletionSettling ? 0 : 1)
                 }
 
                 if deleteProgress > 0 {
@@ -171,6 +215,9 @@ struct DetailScreen: View {
         .persistentSystemOverlays(.hidden)
         .onChange(of: currentIndex) { _, index in
             livePlaybackActive = false
+            if deleteProgress == 0, !deletionSettling {
+                frozenDeleteReplacementID = nil
+            }
             if visiblePhotos.indices.contains(index) { selectedPhotoID = visiblePhotos[index].id }
             if index >= photos.count - 4 { onLoadMore() }
         }
@@ -191,9 +238,6 @@ struct DetailScreen: View {
                 }
             }
         }
-        .onChange(of: deleteProgress) { _, progress in
-            if progress == 0 { deleteSnapshot = nil }
-        }
         .onChange(of: armed) { _, isArmed in
             guard isArmed else {
                 showDeleteHint = false
@@ -203,9 +247,11 @@ struct DetailScreen: View {
             let count = defaults.integer(forKey: "delete_red_toast_count")
             showDeleteHint = count < 2
             if count < 2 { defaults.set(count + 1, forKey: "delete_red_toast_count") }
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
         }
         .task { await showTutorialsIfNeeded() }
+        .task(id: currentIndex) {
+            await prepareMetadata(around: currentIndex)
+        }
         .sheet(item: $sharePayload) { payload in
             ShareSheet(items: [payload.url])
         }
@@ -226,8 +272,31 @@ struct DetailScreen: View {
         controlsVisible && location.y <= safeAreaTop + DetailControls.rowHeight
     }
 
+    private func prepareMetadata(around index: Int) async {
+        guard !visiblePhotos.isEmpty else { return }
+        let lowerBound = max(index - 4, 0)
+        let upperBound = min(index + 4, visiblePhotos.count - 1)
+        let candidates = visiblePhotos[lowerBound...upperBound].filter {
+            preparedMetadata[$0.id] == nil
+        }
+        guard !candidates.isEmpty else { return }
+
+        await withTaskGroup(of: (String, PhotoMetadata).self) { group in
+            for photo in candidates {
+                group.addTask {
+                    let metadata = await MetadataService.shared.metadata(for: photo)
+                    return (photo.id, metadata)
+                }
+            }
+            for await (id, metadata) in group {
+                guard !Task.isCancelled else { return }
+                preparedMetadata[id] = metadata
+            }
+        }
+    }
+
     private func deleteGesture(safeAreaTop: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
             .onChanged { value in
                 guard !livePlaybackActive else {
                     deletingGesture = false
@@ -243,13 +312,14 @@ struct DetailScreen: View {
                 let verticalIntent = abs(value.translation.height) > abs(value.translation.width) * 1.2
                 if !deletingGesture {
                     let shouldStart = value.translation.height < 0 && verticalIntent
-                    if shouldStart, deleteSnapshot == nil {
-                        deleteSnapshot = captureInterfaceSnapshot()
+                    if shouldStart, let replacement = deleteReplacement {
+                        frozenDeleteReplacementID = replacement.photo.id
+                        frozenDeleteReplacementDisplayNumber = min(replacement.index, currentIndex) + 1
                     }
                     deletingGesture = shouldStart
                 }
                 if deletingGesture {
-                    deleteProgress = min(upward / 180, 1.55)
+                    deleteProgress = min(upward / 180, 1)
                 }
             }
             .onEnded { _ in
@@ -259,31 +329,54 @@ struct DetailScreen: View {
                 }
                 deletingGesture = false
                 if armed, let photo = currentPhoto {
-                    let nextID = nextPhoto?.id
-                    withAnimation(.easeIn(duration: 0.26)) { deleteProgress = 1.55 }
+                    withAnimation(.timingCurve(0.18, 0.74, 0.25, 1, duration: 0.34)) {
+                        deleteProgress = 1.55
+                    }
                     Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(270))
+                        try? await Task.sleep(for: .milliseconds(350))
+                        let replacement = deleteReplacement
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) {
-                            if let nextID { selectedPhotoID = nextID }
+                            deletionSettling = true
+                            if let replacement {
+                                selectedPhotoID = replacement.photo.id
+                                currentIndex = replacement.index > currentIndex
+                                    ? currentIndex
+                                    : max(currentIndex - 1, 0)
+                            }
                             queueDeletion(photo)
+                            pageViewGeneration += 1
                             deleteProgress = 0
-                            deleteSnapshot = nil
+                        }
+                        await Task.yield()
+                        try? await Task.sleep(for: .milliseconds(50))
+                        withTransaction(transaction) {
+                            deletionSettling = false
+                            frozenDeleteReplacementID = nil
                         }
                     }
                 } else {
-                    withAnimation(.easeOut(duration: 0.235)) { deleteProgress = 0 }
+                    withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.88)) {
+                        deleteProgress = 0
+                    }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(310))
+                        guard deleteProgress == 0, !deletionSettling else { return }
+                        frozenDeleteReplacementID = nil
+                    }
                 }
             }
     }
 
     private var baseDeleteProgress: CGFloat { min(max(deleteProgress, 0), 1) }
     private var extraDeleteProgress: CGFloat { min(max(deleteProgress - 1, 0), 0.55) / 0.55 }
-    private var pageScale: CGFloat { 1 - baseDeleteProgress * 0.28 - extraDeleteProgress * 0.26 }
-    private var pageOffset: CGFloat { -baseDeleteProgress * 132 - extraDeleteProgress * 58 }
-    private var pageRadius: CGFloat { baseDeleteProgress * 24 + extraDeleteProgress * 10 }
-    private var pageRotation: Double { Double(-baseDeleteProgress * 1.2 - extraDeleteProgress * 1.4) }
+    private var pageScale: CGFloat { 1 - baseDeleteProgress * 0.10 - extraDeleteProgress * 0.06 }
+    private func pageOffset(screenHeight: CGFloat) -> CGFloat {
+        -baseDeleteProgress * 180 - extraDeleteProgress * max(screenHeight * 0.82, 520)
+    }
+    private var pageRadius: CGFloat { baseDeleteProgress * 20 + extraDeleteProgress * 8 }
+    private var pageRotation: Double { Double(-baseDeleteProgress * 0.8 - extraDeleteProgress * 0.8) }
     private var revealProgress: CGFloat { min(max((deleteProgress - 0.22) / 1.33, 0), 1) }
 
     private func moveCurrentPhoto(to album: AlbumOption) {
@@ -312,46 +405,6 @@ struct DetailScreen: View {
         }
     }
 
-    @ViewBuilder
-    private func deleteLiftView(screenSize: CGSize) -> some View {
-        if let deleteSnapshot {
-            Image(uiImage: deleteSnapshot)
-                .resizable()
-                .scaledToFill()
-                .frame(width: screenSize.width, height: screenSize.height)
-                .clipped()
-        } else if let currentPhoto {
-            Color.clear
-                .overlay {
-                    DetailPage(
-                        photo: currentPhoto,
-                        displayNumber: currentIndex + 1,
-                        screenSize: screenSize,
-                        safeAreaTop: 0,
-                        livePlaybackActive: .constant(false),
-                        pagingEnabled: false
-                    )
-                }
-                .frame(width: screenSize.width, height: screenSize.height)
-                .clipped()
-        }
-    }
-
-    private func captureInterfaceSnapshot() -> UIImage? {
-        let window = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow)
-        guard let window else { return nil }
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = window.screen.scale
-        format.opaque = true
-        let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
-        return renderer.image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
-        }
-    }
-
     private func queueDeletion(_ photo: PhotoItem) {
         guard pendingDeletedIDs.insert(photo.id).inserted else { return }
         pendingDeletedPhotos.append(photo)
@@ -375,16 +428,21 @@ struct DetailScreen: View {
 
     private func showTutorialsIfNeeded() async {
         let defaults = UserDefaults.standard
-        if defaults.integer(forKey: "quick_page_toast_count") < 2 {
-            try? await Task.sleep(for: .milliseconds(500))
-            showMessage("单击屏幕左/右边缘，支持快速切换前/后图片", duration: .seconds(4))
-            defaults.set(defaults.integer(forKey: "quick_page_toast_count") + 1, forKey: "quick_page_toast_count")
-            try? await Task.sleep(for: .seconds(5))
-        }
-        if defaults.integer(forKey: "swipe_delete_toast_count") < 2 {
-            showMessage("上滑页面，支持快速删除图片", duration: .seconds(4))
-            defaults.set(defaults.integer(forKey: "swipe_delete_toast_count") + 1, forKey: "swipe_delete_toast_count")
-        }
+        let tutorialKey = "detail_page_tutorial_shown"
+        let alreadyShown = defaults.bool(forKey: tutorialKey)
+            || defaults.integer(forKey: "quick_page_toast_count") > 0
+            || defaults.integer(forKey: "swipe_delete_toast_count") > 0
+        defaults.set(true, forKey: tutorialKey)
+        defaults.set(2, forKey: "quick_page_toast_count")
+        defaults.set(2, forKey: "swipe_delete_toast_count")
+        guard !alreadyShown else { return }
+
+        try? await Task.sleep(for: .milliseconds(500))
+        guard !Task.isCancelled else { return }
+        showMessage("单击屏幕左/右边缘，支持快速切换前/后图片", duration: .seconds(4))
+        try? await Task.sleep(for: .seconds(5))
+        guard !Task.isCancelled else { return }
+        showMessage("上滑页面，支持快速删除图片", duration: .seconds(4))
     }
 
     private func editInLightroom() {
@@ -434,7 +492,7 @@ private struct DetailControls: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            controlButton("xmark", label: "返回", color: PunctumTheme.bone, action: onClose)
+            controlButton("arrow.left", label: "返回", color: PunctumTheme.bone, action: onClose)
             Spacer()
             controlButton("pencil", label: "使用 Lightroom 编辑", color: PunctumTheme.bone, action: onEdit)
             controlButton("arrow.down.to.line", label: "保存到 Punctum 图集", color: saving ? PunctumTheme.muted : PunctumTheme.bone, action: onSave)
@@ -446,7 +504,7 @@ private struct DetailControls: View {
                     .frame(width: 56, height: 56)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconPressButtonStyle())
             .accessibilityLabel("移动到其他图集")
         }
         .padding(.horizontal, 4)
@@ -462,7 +520,7 @@ private struct DetailControls: View {
                 .frame(width: 56, height: 56)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(IconPressButtonStyle())
         .accessibilityLabel(label)
     }
 }
@@ -472,13 +530,6 @@ private enum DetailLiveBadge {
     static let hotSize: CGFloat = 44
 }
 
-private struct DetailImageFrameKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
-    }
-}
-
 private struct DetailPage: View {
     let photo: PhotoItem
     let displayNumber: Int
@@ -486,6 +537,9 @@ private struct DetailPage: View {
     let safeAreaTop: CGFloat
     @Binding var livePlaybackActive: Bool
     var pagingEnabled: Bool = true
+    var isSelected: Bool = true
+    var initialMetadata: PhotoMetadata? = nil
+    var interactionLocked: Bool = false
     var onPrevious: () -> Void = {}
     var onNext: () -> Void = {}
     var onToggleControls: () -> Void = {}
@@ -495,6 +549,7 @@ private struct DetailPage: View {
     @State private var playbackMode: LivePlaybackMode = .none
     @State private var hasBegunPlayback = false
     @State private var liveLoadTask: Task<Void, Never>?
+    @State private var playbackFallbackTask: Task<Void, Never>?
 
     private var badgeHotRect: CGRect {
         guard photo.isLivePhoto, imageFrameInPage.width > 1 else { return .null }
@@ -504,6 +559,22 @@ private struct DetailPage: View {
             width: DetailLiveBadge.hotSize,
             height: DetailLiveBadge.hotSize
         )
+    }
+
+    private var displayedMetadata: PhotoMetadata {
+        var value = metadata == PhotoMetadata() ? (initialMetadata ?? PhotoMetadata()) : metadata
+        if value.dateTaken == nil {
+            value.dateTaken = PunctumFormatting.detailDate(photo.creationDate)
+        }
+        if value.coordinate == nil {
+            value.coordinate = photo.asset.location.map {
+                String(format: "%.5f, %.5f", $0.coordinate.latitude, $0.coordinate.longitude)
+            }
+        }
+        if value.resolution == nil, photo.width > 0, photo.height > 0 {
+            value.resolution = "\(photo.width) × \(photo.height)"
+        }
+        return value
     }
 
     var body: some View {
@@ -517,12 +588,18 @@ private struct DetailPage: View {
                         livePhoto: livePhoto,
                         playbackMode: playbackMode,
                         hasBegunPlayback: hasBegunPlayback,
+                        onFrameChange: { imageFrameInPage = $0 },
+                        onTopAreaTap: onToggleControls,
                         onDidBeginPlayback: { hasBegunPlayback = true },
                         onDidEndPlayback: {
                             if playbackMode == .playOnce { haltPlayback() }
                         }
                     )
-                    DetailMetadataView(metadata: metadata, displayNumber: displayNumber)
+                    DetailMetadataView(
+                        metadata: displayedMetadata,
+                        displayNumber: displayNumber,
+                        onTap: onToggleControls
+                    )
                         .padding(.top, 34)
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -530,12 +607,12 @@ private struct DetailPage: View {
             }
             .ignoresSafeArea(edges: .top)
             .scrollBounceBehavior(.basedOnSize)
-            .scrollDisabled(livePlaybackActive)
+            .scrollDisabled(interactionLocked)
 
             if pagingEnabled {
                 LiveHoldCatcher(
-                    holdEnabled: photo.isLivePhoto,
-                    pagingEnabled: true,
+                    holdEnabled: photo.isLivePhoto && !interactionLocked,
+                    pagingEnabled: !interactionLocked,
                     livePlaybackActive: livePlaybackActive,
                     imageRect: imageFrameInPage,
                     badgeHotRect: badgeHotRect,
@@ -548,14 +625,22 @@ private struct DetailPage: View {
                     onTapRight: onNext,
                     onTapCenter: onToggleControls
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: screenSize.width)
+                .frame(maxHeight: .infinity)
+                .zIndex(1)
             }
         }
         .coordinateSpace(name: "detailPage")
         .background(PunctumTheme.ink)
-        .onPreferenceChange(DetailImageFrameKey.self) { imageFrameInPage = $0 }
-        .task(id: photo.id) {
-            metadata = await MetadataService.shared.metadata(for: photo)
+        .task(id: "\(photo.id)-\(isSelected)") {
+            guard pagingEnabled || isSelected else { return }
+            let loaded = await MetadataService.shared.metadata(for: photo)
+            guard !Task.isCancelled else { return }
+            metadata = loaded
+            if let location = await MetadataService.shared.locationName(for: photo) {
+                guard !Task.isCancelled else { return }
+                metadata.location = location
+            }
         }
         .onAppear {
             if pagingEnabled { loadLivePhoto() }
@@ -573,14 +658,25 @@ private struct DetailPage: View {
 
     private func startPlayback(_ mode: LivePlaybackMode) {
         guard photo.isLivePhoto else { return }
+        playbackFallbackTask?.cancel()
+        playbackFallbackTask = nil
         if mode == .hold {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         }
         playbackMode = mode
         livePlaybackActive = true
+        if mode == .playOnce {
+            playbackFallbackTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(4))
+                guard !Task.isCancelled, playbackMode == .playOnce else { return }
+                haltPlayback()
+            }
+        }
     }
 
     private func haltPlayback() {
+        playbackFallbackTask?.cancel()
+        playbackFallbackTask = nil
         playbackMode = .none
         livePlaybackActive = false
         hasBegunPlayback = false
@@ -616,6 +712,8 @@ private struct DetailPhotoFrame: View {
     let livePhoto: PHLivePhoto?
     let playbackMode: LivePlaybackMode
     let hasBegunPlayback: Bool
+    var onFrameChange: (CGRect) -> Void = { _ in }
+    var onTopAreaTap: () -> Void = {}
     var onDidBeginPlayback: () -> Void = {}
     var onDidEndPlayback: () -> Void = {}
 
@@ -655,18 +753,27 @@ private struct DetailPhotoFrame: View {
             }
         }
         .frame(width: screenSize.width, height: imageHeight)
-        .background {
-            GeometryReader { geo in
-                Color.clear.preference(key: DetailImageFrameKey.self, value: geo.frame(in: .named("detailPage")))
-            }
+        .onGeometryChange(for: CGRect.self) { geo in
+            geo.frame(in: .named("detailPage"))
+        } action: { frame in
+            onFrameChange(frame)
         }
         .padding(.top, topPadding)
+        .overlay(alignment: .top) {
+            if topPadding > 0 {
+                Color.clear
+                    .frame(height: topPadding)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onTopAreaTap)
+            }
+        }
     }
 }
 
 private struct DetailMetadataView: View {
     let metadata: PhotoMetadata
     let displayNumber: Int
+    var onTap: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -700,6 +807,8 @@ private struct DetailMetadataView: View {
         }
         .padding(.horizontal, 30)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
     }
 
     @ViewBuilder

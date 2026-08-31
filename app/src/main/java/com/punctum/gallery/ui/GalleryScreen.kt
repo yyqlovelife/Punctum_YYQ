@@ -357,7 +357,9 @@ private fun GalleryHeader(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(
-                modifier = Modifier.clickable(onClick = onOpenSwitcher).padding(vertical = 6.dp),
+                modifier = Modifier
+                    .punctumPressable(onClick = onOpenSwitcher)
+                    .padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(

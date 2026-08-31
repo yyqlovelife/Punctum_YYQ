@@ -45,6 +45,7 @@ struct RootView: View {
                 DetailScreen(
                     photos: model.photos,
                     startIndex: detailIndex,
+                    initialMetadata: model.detailInitialMetadata,
                     currentGalleryID: model.currentGalleryID ?? "",
                     onClose: model.closeDetail,
                     onMoveInLibrary: model.movePhotoInLibrary,
@@ -52,11 +53,9 @@ struct RootView: View {
                     onLoadMore: model.loadMorePhotos
                 )
                 .zIndex(20)
-                .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.16), value: model.showSwitcher)
-        .animation(.easeOut(duration: 0.16), value: model.detailIndex)
         .sheet(isPresented: $model.showAlbumPicker) {
             AlbumPickerView(
                 existingIDs: Set(model.galleries.map(\.id)),

@@ -7,10 +7,14 @@ import UIKit
 final class PhotoThumbnailCache {
     static let shared = PhotoThumbnailCache()
     private let cache = NSCache<NSString, UIImage>()
+    private let previewCache = NSCache<NSString, UIImage>()
+    private var previewPixelCounts: [String: Int] = [:]
 
     private init() {
         cache.countLimit = 180
         cache.totalCostLimit = 64 * 1024 * 1024
+        previewCache.countLimit = 120
+        previewCache.totalCostLimit = 96 * 1024 * 1024
     }
 
     func image(for id: String, size: CGSize) -> UIImage? {
@@ -20,6 +24,15 @@ final class PhotoThumbnailCache {
     func store(_ image: UIImage, for id: String, size: CGSize) {
         let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
         cache.setObject(image, forKey: Self.key(id, size) as NSString, cost: max(cost, 1))
+        let pixels = max(cost / 4, 1)
+        if pixels >= previewPixelCounts[id, default: 0] {
+            previewPixelCounts[id] = pixels
+            previewCache.setObject(image, forKey: id as NSString, cost: max(cost, 1))
+        }
+    }
+
+    func previewImage(for id: String) -> UIImage? {
+        previewCache.object(forKey: id as NSString)
     }
 
     private static func key(_ id: String, _ size: CGSize) -> String {
@@ -148,7 +161,9 @@ struct PhotoAssetImage: View {
     @StateObject private var loader = PhotoImageLoader()
 
     var body: some View {
-        let displayed = loader.image ?? PhotoThumbnailCache.shared.image(for: photo.id, size: targetSize)
+        let displayed = loader.image
+            ?? PhotoThumbnailCache.shared.image(for: photo.id, size: targetSize)
+            ?? PhotoThumbnailCache.shared.previewImage(for: photo.id)
         ZStack {
             if let image = displayed {
                 Image(uiImage: image)
@@ -163,6 +178,7 @@ struct PhotoAssetImage: View {
         .onAppear(perform: startLoad)
         .onChange(of: photo.id) { _, newID in
             loader.image = PhotoThumbnailCache.shared.image(for: newID, size: targetSize)
+                ?? PhotoThumbnailCache.shared.previewImage(for: newID)
             startLoad()
         }
         .onDisappear { loader.cancel() }

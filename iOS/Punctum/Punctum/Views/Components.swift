@@ -140,10 +140,167 @@ final class LockedFontLabel: UILabel {
     }
 }
 
-struct InvitationCardButtonStyle: ButtonStyle {
+struct InvitationCardButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.92 : 1)
+        ImmediatePressButtonBody(action: configuration.trigger) { isPressed in
+            configuration.label
+                .scaleEffect(isPressed ? 0.985 : 1)
+                .offset(y: isPressed ? 4 : 0)
+                .opacity(isPressed ? 0.96 : 1)
+        }
+    }
+}
+
+struct HeaderBackButtonStyle: PrimitiveButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ImmediatePressButtonBody(action: configuration.trigger) { isPressed in
+            configuration.label
+                .environment(\.immediateButtonIsPressed, isPressed)
+        }
+    }
+}
+
+struct IconPressButtonStyle: PrimitiveButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ImmediatePressButtonBody(action: configuration.trigger) { isPressed in
+            configuration.label
+                .scaleEffect(isPressed ? 0.88 : 1)
+                .offset(y: isPressed ? 2 : 0)
+                .opacity(isPressed ? 0.78 : 1)
+        }
+    }
+}
+
+private struct ImmediateButtonPressedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var immediateButtonIsPressed: Bool {
+        get { self[ImmediateButtonPressedKey.self] }
+        set { self[ImmediateButtonPressedKey.self] = newValue }
+    }
+}
+
+private struct ImmediatePressButtonBody<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: (Bool) -> Content
+
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isPressed = false
+    @State private var isCompletingTap = false
+    @State private var pressedAt: CFTimeInterval = 0
+
+    private let minimumPressedDuration: CFTimeInterval = 0.12
+    private let navigationDelay: CFTimeInterval = 0.24
+
+    var body: some View {
+        content(isPressed)
+            .contentShape(Rectangle())
+            .overlay {
+                ImmediatePressGestureOverlay(onPhase: handleGesturePhase)
+                    .allowsHitTesting(isEnabled)
+            }
+    }
+
+    private func handleGesturePhase(_ phase: ImmediatePressGestureOverlay.Phase) {
+        switch phase {
+        case .began:
+            guard isEnabled, !isCompletingTap else { return }
+            pressedAt = CACurrentMediaTime()
+            withAnimation(.easeOut(duration: 0.11)) {
+                isPressed = true
+            }
+
+        case .ended:
+            guard isEnabled, isPressed, !isCompletingTap else { return }
+            isCompletingTap = true
+            let elapsed = CACurrentMediaTime() - pressedAt
+            let releaseDelay = max(0, minimumPressedDuration - elapsed)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + releaseDelay) {
+                withAnimation(.spring(response: 0.20, dampingFraction: 0.72)) {
+                    isPressed = false
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + navigationDelay) {
+                    action()
+                    isCompletingTap = false
+                }
+            }
+
+        case .cancelled:
+            guard !isCompletingTap else { return }
+            withAnimation(.spring(response: 0.20, dampingFraction: 0.76)) {
+                isPressed = false
+            }
+        }
+    }
+}
+
+private struct ImmediatePressGestureOverlay: UIViewRepresentable {
+    enum Phase {
+        case began
+        case ended
+        case cancelled
+    }
+
+    let onPhase: (Phase) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPhase: onPhase)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.backgroundColor = .clear
+
+        let recognizer = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePress(_:))
+        )
+        recognizer.minimumPressDuration = 0
+        recognizer.allowableMovement = 10
+        recognizer.cancelsTouchesInView = false
+        recognizer.delegate = context.coordinator
+        view.addGestureRecognizer(recognizer)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.onPhase = onPhase
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onPhase: (Phase) -> Void
+
+        init(onPhase: @escaping (Phase) -> Void) {
+            self.onPhase = onPhase
+        }
+
+        @objc func handlePress(_ recognizer: UILongPressGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                onPhase(.began)
+            case .ended:
+                guard let view = recognizer.view,
+                      view.bounds.insetBy(dx: -4, dy: -4).contains(recognizer.location(in: view)) else {
+                    onPhase(.cancelled)
+                    return
+                }
+                onPhase(.ended)
+            case .cancelled, .failed:
+                onPhase(.cancelled)
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
     }
 }
 

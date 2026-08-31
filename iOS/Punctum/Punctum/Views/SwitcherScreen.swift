@@ -134,7 +134,7 @@ struct SwitcherScreen: View {
                 .frame(height: 44)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(HeaderIconButtonStyle())
+        .buttonStyle(IconPressButtonStyle())
         .accessibilityLabel(label)
     }
 }
@@ -1064,13 +1064,6 @@ private struct SortGalleriesSheet: View {
         }
         .disabled(!enabled)
         .buttonStyle(.plain)
-    }
-}
-
-private struct HeaderIconButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.45 : 1)
     }
 }
 

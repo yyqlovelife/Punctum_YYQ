@@ -234,7 +234,7 @@ final class PhotoLibraryService {
     ) async -> PHLivePhoto? {
         await withCheckedContinuation { continuation in
             let options = PHLivePhotoRequestOptions()
-            options.deliveryMode = .opportunistic
+            options.deliveryMode = .highQualityFormat
             options.version = version
             options.isNetworkAccessAllowed = true
             let gate = LivePhotoContinuationGate(continuation)
@@ -244,17 +244,19 @@ final class PhotoLibraryService {
                 contentMode: .aspectFit,
                 options: options
             ) { livePhoto, info in
+                let degraded = info?[PHImageResultIsDegradedKey] as? Bool == true
                 if info?[PHImageCancelledKey] as? Bool == true {
                     gate.resume(nil)
                     return
                 }
+                // A degraded PHLivePhoto is only a still-image preview. It has
+                // no playable motion/audio payload, so wait for the final result.
+                if degraded { return }
                 if let livePhoto {
                     gate.resume(livePhoto)
                     return
                 }
-                if info?[PHImageErrorKey] != nil || info?[PHImageResultIsDegradedKey] as? Bool != true {
-                    gate.resume(nil)
-                }
+                gate.resume(nil)
             }
         }
     }
@@ -287,11 +289,11 @@ final class PhotoLibraryService {
                         gate.resume(nil)
                         return
                     }
+                    if info[PHLivePhotoInfoIsDegradedKey] as? Bool == true { return }
                     if let livePhoto {
                         gate.resume(livePhoto)
                         return
                     }
-                    if info[PHLivePhotoInfoIsDegradedKey] as? Bool == true { return }
                     gate.resume(nil)
                 }
             }

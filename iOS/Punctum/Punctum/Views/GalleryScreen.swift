@@ -8,7 +8,7 @@ struct GalleryScreen: View {
     let isLoading: Bool
     let onOpenSwitcher: () -> Void
     let onRename: () -> Void
-    let onSelectPhoto: (Int) -> Void
+    let onSelectPhoto: (Int, PhotoMetadata) -> Void
     let onDeletePhoto: (PhotoItem) -> Void
     var onLoadMore: () -> Void = {}
 
@@ -75,16 +75,17 @@ private struct GalleryHeader: View {
             HStack {
                 Button(action: onOpenSwitcher) {
                     HStack(spacing: 8) {
-                        Image(systemName: "arrow.left")
-                            .font(.system(size: 14, weight: .medium))
+                        GalleryBackArrow()
                         Text("Your Punctums")
                             .font(PunctumTheme.georgia(12, bold: true))
                             .tracking(1.2)
                     }
                     .foregroundStyle(PunctumTheme.muted)
-                    .padding(.vertical, 6)
+                    .frame(minHeight: 44, alignment: .leading)
+                    .padding(.trailing, 8)
+                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(HeaderBackButtonStyle())
                 Spacer()
                 Button(action: onRename) {
                     Image(systemName: "pencil")
@@ -132,10 +133,22 @@ private struct GalleryHeader: View {
     }
 }
 
+private struct GalleryBackArrow: View {
+    @Environment(\.immediateButtonIsPressed) private var isPressed
+
+    var body: some View {
+        Image(systemName: "arrow.left")
+            .font(.system(size: 14, weight: .medium))
+            .scaleEffect(isPressed ? 0.9 : 1)
+            .offset(y: isPressed ? 2 : 0)
+            .opacity(isPressed ? 0.78 : 1)
+    }
+}
+
 private struct OriginalRatioRow: View {
     let photos: [PhotoItem]
     let startIndex: Int
-    let onSelect: (Int) -> Void
+    let onSelect: (Int, PhotoMetadata) -> Void
     let onDelete: (PhotoItem) -> Void
 
     private var aspects: [CGFloat] {
@@ -160,7 +173,9 @@ private struct OriginalRatioRow: View {
                         ForEach(Array(photos.enumerated()), id: \.element.id) { offset, photo in
                             PhotoGridCell(
                                 photo: photo,
-                                onSelect: { onSelect(startIndex + offset) },
+                                onSelect: { metadata in
+                                    onSelect(startIndex + offset, metadata)
+                                },
                                 onDelete: { onDelete(photo) }
                             )
                             .id(photo.id)
@@ -186,7 +201,7 @@ private struct OriginalRatioRow: View {
 
 private struct PhotoGridCell: View {
     let photo: PhotoItem
-    let onSelect: () -> Void
+    let onSelect: (PhotoMetadata) -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -199,7 +214,18 @@ private struct PhotoGridCell: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             GridPressCatcher(
-                onTap: onSelect,
+                onTouchDown: {
+                    Task(priority: .userInitiated) {
+                        _ = await MetadataService.shared.metadata(for: photo)
+                    }
+                },
+                onTap: {
+                    Task(priority: .userInitiated) {
+                        let metadata = await MetadataService.shared.metadata(for: photo)
+                        guard !Task.isCancelled else { return }
+                        onSelect(metadata)
+                    }
+                },
                 onCommit: {
                     UINotificationFeedbackGenerator().notificationOccurred(.warning)
                     onDelete()
@@ -209,10 +235,14 @@ private struct PhotoGridCell: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .contentShape(Rectangle())
+        .task(id: photo.id, priority: .utility) {
+            _ = await MetadataService.shared.metadata(for: photo)
+        }
     }
 }
 
 private struct GridPressCatcher: UIViewRepresentable {
+    var onTouchDown: () -> Void
     var onTap: () -> Void
     var onCommit: () -> Void
 
@@ -227,6 +257,7 @@ private struct GridPressCatcher: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: GridPressView, context: Context) {
+        uiView.onTouchDown = onTouchDown
         context.coordinator.onTap = onTap
         context.coordinator.onCommit = onCommit
         context.coordinator.view = uiView
@@ -344,6 +375,7 @@ private struct GridPressCatcher: UIViewRepresentable {
 }
 
 final class GridPressView: UIView {
+    var onTouchDown: () -> Void = {}
     var progress: CGFloat = 0 {
         didSet { badge.progress = progress }
     }
@@ -366,6 +398,11 @@ final class GridPressView: UIView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onTouchDown()
+        super.touchesBegan(touches, with: event)
+    }
 }
 
 private final class DeleteBadgeView: UIView {

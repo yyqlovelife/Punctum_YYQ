@@ -12,6 +12,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published var showSwitcher = false
     @Published var showAlbumPicker = false
     @Published var detailIndex: Int?
+    @Published private(set) var detailInitialMetadata: PhotoMetadata?
     @Published var invitationStyle: InvitationCardStyle
     @Published var permissionMessage: String?
     @Published var transientMessage: String?
@@ -95,8 +96,10 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                     let ready = await MainActor.run { self?.photos.isEmpty == false }
                     if ready == true { break }
                 }
+                guard let photo = await MainActor.run(body: { self?.photos.first }) else { return }
+                let metadata = await MetadataService.shared.metadata(for: photo)
                 await MainActor.run {
-                    self?.openDetail(at: 0)
+                    self?.openDetail(at: 0, metadata: metadata)
                 }
             }
         }
@@ -226,13 +229,19 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         store.saveOverviewSnapshots(overviewSnapshots)
     }
 
-    func openDetail(at index: Int) {
+    func openDetail(at index: Int, metadata: PhotoMetadata) {
         guard photos.indices.contains(index) else { return }
-        detailIndex = index
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            detailInitialMetadata = metadata
+            detailIndex = index
+        }
     }
 
     func closeDetail(pendingPhotos: [PhotoItem] = []) {
         detailIndex = nil
+        detailInitialMetadata = nil
         guard !pendingPhotos.isEmpty else { return }
 
         var seen = Set<String>()
@@ -606,6 +615,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         "按下快门的勇气，比技巧更珍贵",
         "光轨划过暗房，向流星写下情书",
         "镜头，比情话更擅长说永远",
+        "观止，关心每一幅照片被重新看见的时刻",
+        "每一次回望，都重新感受影像的重量",
     ]
 }
 
