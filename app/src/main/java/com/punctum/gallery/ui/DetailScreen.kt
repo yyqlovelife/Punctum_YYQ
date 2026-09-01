@@ -26,11 +26,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -88,6 +91,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -135,6 +140,12 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.coroutines.resume
 
+private const val DELETE_ARM_PROGRESS = 0.72f
+private const val DELETE_DRAG_RESISTANCE = 0.14f
+private const val DELETE_DRAG_MAX_PROGRESS = 1.12f
+private const val DELETE_COMMIT_DURATION_MS = 300
+private const val DELETE_SETTLE_DURATION_MS = 50L
+
 @Composable
 internal fun DetailScreen(
     photos: List<Photo>,
@@ -162,11 +173,18 @@ internal fun DetailScreen(
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
-    val deleteThreshold = with(density) { 180.dp.toPx() }
-    var deleteProgress by remember { mutableStateOf(0f) }
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+    val deleteThreshold = with(density) { 140.dp.toPx() }
+    var detailRootHeightPx by remember(screenHeightPx) { mutableStateOf(screenHeightPx) }
+    var deleteTargetCenterYPx by remember { mutableStateOf<Float?>(null) }
+    var deleteDragProgress by remember { mutableStateOf(0f) }
+    var deleteCommitProgress by remember { mutableStateOf(0f) }
+    var committedDragProgress by remember { mutableStateOf(0f) }
+    var deleteTransitionLocked by remember { mutableStateOf(false) }
+    val deleteLocked = rememberUpdatedState(deleteTransitionLocked)
     val displayedDetailUris = remember { mutableSetOf<String>() }
-    val progress = deleteProgress
-    val armed = progress >= 0.72f
+    val deleteVisible = deleteDragProgress > 0f || deleteCommitProgress > 0f
+    val armed = deleteTransitionLocked || deleteDragProgress >= DELETE_ARM_PROGRESS
     val pagerState = rememberPagerState(
         initialPage = startIndex.coerceIn(0, photos.size - 1),
     ) { photos.size }
@@ -277,12 +295,16 @@ internal fun DetailScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Ink)
+            .onSizeChanged { detailRootHeightPx = it.height.toFloat() }
             .pointerInput(photos, pagerState.currentPage) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
+                    if (deleteLocked.value) return@awaitEachGesture
                     var total = Offset.Zero
                     var deletingGesture = false
-                    deleteProgress = 0f
+                    deleteDragProgress = 0f
+                    deleteCommitProgress = 0f
+                    committedDragProgress = 0f
                     activeDeletePhoto = null
 
                     while (true) {
@@ -296,29 +318,43 @@ internal fun DetailScreen(
                             if (deletingGesture) {
                                 val currentPage = pagerState.currentPage
                                 val targetPhoto = photos.getOrNull(currentPage)
-                                val currentProgress = deleteProgress
+                                val currentProgress = deleteDragProgress
                                 scope.launch {
-                                    val anim = Animatable(currentProgress)
-                                    if (currentProgress >= 0.72f) {
+                                    if (currentProgress >= DELETE_ARM_PROGRESS) {
+                                        deleteTransitionLocked = true
+                                        committedDragProgress = currentProgress
+                                        deleteCommitProgress = 0f
                                         activeDeletePhoto = targetPhoto
                                         nextDeletePhoto?.let {
                                             displayedDetailUris.add(it.uri.toString())
-                                            settlingPhoto = it
                                         }
-                                        anim.animateTo(1.55f, tween(durationMillis = 260)) {
-                                            deleteProgress = value
+                                        val anim = Animatable(0f)
+                                        anim.animateTo(
+                                            targetValue = 1f,
+                                            animationSpec = tween(
+                                                durationMillis = DELETE_COMMIT_DURATION_MS,
+                                                easing = LinearEasing,
+                                            ),
+                                        ) {
+                                            deleteCommitProgress = value
                                         }
+                                        settlingPhoto = nextDeletePhoto
                                         targetPhoto?.let { photo ->
                                             onDelete(photo)
                                             hostView.performDeleteHaptic()
                                         }
-                                        deleteProgress = 0f
+                                        delay(DELETE_SETTLE_DURATION_MS)
+                                        deleteDragProgress = 0f
+                                        deleteCommitProgress = 0f
+                                        committedDragProgress = 0f
                                         activeDeletePhoto = null
+                                        deleteTransitionLocked = false
                                         delay(220)
                                         settlingPhoto = null
                                     } else {
+                                        val anim = Animatable(currentProgress)
                                         anim.animateTo(0f, tween(durationMillis = 235)) {
-                                            deleteProgress = value
+                                            deleteDragProgress = value
                                         }
                                         activeDeletePhoto = null
                                     }
@@ -340,15 +376,19 @@ internal fun DetailScreen(
                             if (activeDeletePhoto == null) {
                                 activeDeletePhoto = photos.getOrNull(pagerState.currentPage)
                             }
-                            deleteProgress = (upwardDistance / deleteThreshold).coerceIn(0f, 1.55f)
+                            deleteDragProgress = mapDeleteDragProgress(upwardDistance / deleteThreshold)
                             change.consume()
                         }
                     }
                 }
             },
     ) {
-        if (progress > 0f && nextDeletePhoto != null) {
-            val reveal = ((progress - 0.22f) / 1.33f).coerceIn(0f, 1f)
+        if (deleteVisible && nextDeletePhoto != null) {
+            val reveal = deleteBackgroundReveal(
+                dragProgress = deleteDragProgress,
+                commitProgress = deleteCommitProgress,
+                committedDragProgress = committedDragProgress,
+            )
             Box(Modifier.fillMaxSize()) {
                 ImmersivePhoto(
                     photo = nextDeletePhoto,
@@ -404,7 +444,7 @@ internal fun DetailScreen(
                     onImageVisible = { displayedDetailUris.add(moveFrom.uri.toString()) },
                 )
             }
-        } else if (progress == 0f) {
+        } else if (!deleteVisible) {
             HorizontalPager(
                 state = pagerState,
                 userScrollEnabled = !livePlaybackActive,
@@ -440,11 +480,32 @@ internal fun DetailScreen(
                 }
             }
         } else {
+            val deleteCardRadius = deletePageCornerRadius(
+                dragProgress = deleteDragProgress,
+                commitProgress = deleteCommitProgress,
+                committedDragProgress = committedDragProgress,
+            )
+            val deleteCardBorderAlpha = (
+                deleteDragProgress.coerceAtLeast(committedDragProgress) / 0.42f
+                ).coerceIn(0f, 1f) * 0.10f
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .deletePageTransform(progress, density)
-                    .background(Ink),
+                    .deletePageTransform(
+                        dragProgress = deleteDragProgress,
+                        commitProgress = deleteCommitProgress,
+                        committedDragProgress = committedDragProgress,
+                        targetTranslationYPx = (
+                            deleteTargetCenterYPx ?: with(density) { 82.dp.toPx() }
+                            ) - detailRootHeightPx / 2f,
+                        density = density,
+                    )
+                    .background(Ink)
+                    .border(
+                        width = 0.75.dp,
+                        color = Bone.copy(alpha = deleteCardBorderAlpha),
+                        shape = RoundedCornerShape(deleteCardRadius.dp),
+                    ),
             ) {
                 (activeDeletePhoto ?: currentPhoto)?.let { photo ->
                     ImmersivePhoto(
@@ -479,8 +540,8 @@ internal fun DetailScreen(
         }
 
         AnimatedVisibility(
-            visible = progress > 0f,
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 58.dp),
+            visible = deleteVisible,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 58.dp),
             enter = fadeIn(tween(120)),
             exit = fadeOut(tween(120)),
         ) {
@@ -488,6 +549,19 @@ internal fun DetailScreen(
                 Box(
                     modifier = Modifier
                         .size(48.dp)
+                        .onGloballyPositioned { coordinates ->
+                            deleteTargetCenterYPx = coordinates.localToRoot(
+                                Offset(
+                                    coordinates.size.width / 2f,
+                                    coordinates.size.height / 2f,
+                                ),
+                            ).y
+                        }
+                        .graphicsLayer {
+                            val pulse = deleteButtonPulse(deleteCommitProgress)
+                            scaleX = pulse
+                            scaleY = pulse
+                        }
                         .background(
                             color = if (armed) Color(0xFFE24646) else Color(0xFF2C2C2C).copy(alpha = 0.78f),
                             shape = CircleShape,
@@ -614,24 +688,94 @@ internal fun DetailScreen(
     }
 }
 
-private fun Modifier.deletePageTransform(progress: Float, density: Density): Modifier {
-    val base = progress.coerceIn(0f, 1f)
-    val extra = ((progress - 1f).coerceIn(0f, 0.55f)) / 0.55f
-    val scale = 1f - base * 0.28f - extra * 0.26f
-    val yDp = -base * 132f - extra * 58f
-    val radiusDp = base * 24f + extra * 10f
-    val shadowDp = base * 44f + extra * 18f
-    val rotation = -base * 1.2f - extra * 1.4f
+private fun Modifier.deletePageTransform(
+    dragProgress: Float,
+    commitProgress: Float,
+    committedDragProgress: Float,
+    targetTranslationYPx: Float,
+    density: Density,
+): Modifier {
+    val sourceDrag = if (commitProgress > 0f) committedDragProgress else dragProgress
+    val dragBase = sourceDrag.coerceIn(0f, 1f)
+    val dragExtra = ((sourceDrag - 1f) / (DELETE_DRAG_MAX_PROGRESS - 1f)).coerceIn(0f, 1f)
+    val startScale = 1f - dragBase * 0.08f - dragExtra * 0.01f
+    val startYDp = -dragBase * 132f - dragExtra * 18f
+    val startRadiusDp = dragBase * 18f + dragExtra * 2f
+    val startShadowDp = 10f + dragBase * 24f
+
+    val continuousProgress = commitProgress.coerceIn(0f, 1f)
+    val motionProgress = easeOutQuadratic(continuousProgress)
+    val shapeProgress = smoothStep(continuousProgress)
+    val scale = mix(startScale, 0.035f, shapeProgress)
+    val startYPx = with(density) { startYDp.dp.toPx() }
+    val yPx = mix(startYPx, targetTranslationYPx, motionProgress)
+    val radiusDp = mix(startRadiusDp, 180f, shapeProgress)
+    val shadowDp = mix(startShadowDp, 0f, shapeProgress)
+    val fadeProgress = ((continuousProgress - 0.88f) / 0.12f).coerceIn(0f, 1f)
+    val cardAlpha = 1f - LinearOutSlowInEasing.transform(fadeProgress)
     return this.graphicsLayer {
         scaleX = scale
         scaleY = scale
-        translationY = with(density) { yDp.dp.toPx() }
-        rotationZ = rotation
+        translationY = yPx
+        alpha = cardAlpha
         shape = RoundedCornerShape(radiusDp.dp)
         clip = true
-        shadowElevation = with(density) { (10f + shadowDp).dp.toPx() }
+        shadowElevation = with(density) { shadowDp.dp.toPx() }
     }
 }
+
+private fun mapDeleteDragProgress(rawProgress: Float): Float {
+    val positiveProgress = rawProgress.coerceAtLeast(0f)
+    if (positiveProgress <= 1f) return positiveProgress
+    val resistedProgress = 1f + (positiveProgress - 1f) * DELETE_DRAG_RESISTANCE
+    return resistedProgress.coerceAtMost(DELETE_DRAG_MAX_PROGRESS)
+}
+
+private fun deletePageCornerRadius(
+    dragProgress: Float,
+    commitProgress: Float,
+    committedDragProgress: Float,
+): Float {
+    val sourceDrag = if (commitProgress > 0f) committedDragProgress else dragProgress
+    val dragBase = sourceDrag.coerceIn(0f, 1f)
+    val dragExtra = ((sourceDrag - 1f) / (DELETE_DRAG_MAX_PROGRESS - 1f)).coerceIn(0f, 1f)
+    val startRadius = dragBase * 18f + dragExtra * 2f
+    return mix(startRadius, 180f, smoothStep(commitProgress.coerceIn(0f, 1f)))
+}
+
+private fun deleteBackgroundReveal(
+    dragProgress: Float,
+    commitProgress: Float,
+    committedDragProgress: Float,
+): Float {
+    val sourceDrag = if (commitProgress > 0f) committedDragProgress else dragProgress
+    val dragReveal = (sourceDrag / DELETE_DRAG_MAX_PROGRESS).coerceIn(0f, 1f) * 0.30f
+    if (commitProgress <= 0f) return dragReveal
+    return mix(dragReveal, 1f, easeOutQuadratic(commitProgress.coerceIn(0f, 1f)))
+}
+
+private fun deleteButtonPulse(commitProgress: Float): Float {
+    if (commitProgress <= 0.72f) return 1f
+    val targetProgress = ((commitProgress - 0.72f) / 0.28f).coerceIn(0f, 1f)
+    return if (targetProgress <= 0.68f) {
+        mix(1f, 1.08f, targetProgress / 0.68f)
+    } else {
+        mix(1.08f, 1f, (targetProgress - 0.68f) / 0.32f)
+    }
+}
+
+private fun easeOutQuadratic(progress: Float): Float {
+    val remaining = 1f - progress.coerceIn(0f, 1f)
+    return 1f - remaining * remaining
+}
+
+private fun smoothStep(progress: Float): Float {
+    val clamped = progress.coerceIn(0f, 1f)
+    return clamped * clamped * (3f - 2f * clamped)
+}
+
+private fun mix(start: Float, end: Float, progress: Float): Float =
+    start + (end - start) * progress.coerceIn(0f, 1f)
 
 @Composable
 private fun ImmersivePhoto(

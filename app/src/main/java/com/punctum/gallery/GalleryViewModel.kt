@@ -574,7 +574,13 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         moveInProgress != null || completedMove != null
 
     private fun visiblePhotosForGallery(uriKey: String, list: List<Photo>): List<Photo> =
-        excludeHeldMove(applyMoveTombstones(uriKey, applyDeleteTombstones(list)), uriKey)
+        excludeHeldMove(
+            applyMoveTombstones(
+                uriKey,
+                applyDeleteTombstones(list.distinctBy { it.uri }),
+            ),
+            uriKey,
+        )
 
     private fun excludeHeldMove(list: List<Photo>, uriKey: String): List<Photo> {
         if (uriKey != currentUri) return list

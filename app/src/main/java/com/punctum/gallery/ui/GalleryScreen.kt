@@ -155,11 +155,9 @@ internal fun GalleryScreen(
 
             else -> items(
                 count = (photos.size + 1) / 2,
-                key = { rowIndex ->
-                    val first = photos[rowIndex * 2].uri.toString()
-                    val second = photos.getOrNull(rowIndex * 2 + 1)?.uri?.toString().orEmpty()
-                    "$first|$second"
-                },
+                // 刷新前几张完整元数据时，照片的行组合可能发生变化。
+                // 行按位置保持稳定，单元格继续按 URI 隔离，避免旧行与新行短暂重叠。
+                key = { rowIndex -> "photo-row-$rowIndex" },
             ) { rowIndex ->
                 val rowStartIndex = rowIndex * 2
                 val row = photos.subList(
@@ -179,7 +177,6 @@ internal fun GalleryScreen(
                             if (updated.containsAll(firstRowUris)) onContentReady()
                         }
                     },
-                    modifier = Modifier.animateItem(),
                 )
             }
         }

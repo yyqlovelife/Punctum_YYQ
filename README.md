@@ -49,7 +49,7 @@ Punctum 直接映射设备里的系统图集，照片仍由系统相册管理。
 
 | 平台 | 版本 | 构建号 | 状态 |
 |---|---:|---:|---|
-| Android | `0.5.4` | `54` | 正式版，已完成 OPPO PMX110 真机验收 |
+| Android | `0.5.5` | `55` | 正式版，已完成 OPPO PMX110 真机验收 |
 | iOS | `0.5.5` | `55` | 正式版，已完成 iPhone 14 Pro 真机验收 |
 
 Android 与 iOS 已对齐首页三态、系统图集映射、原比例画廊、大图信息、实况播放、照片移动和删除等主要体验。平台底层分别遵循 Android MediaStore / Motion Photo 与 iOS PhotoKit / Live Photo 的原生机制。
