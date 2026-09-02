@@ -255,6 +255,11 @@ struct DetailScreen: View {
         .sheet(item: $sharePayload) { payload in
             ShareSheet(items: [payload.url])
         }
+        .overlay {
+            if showMovePicker {
+                PunctumDialogBackdrop()
+            }
+        }
         .sheet(isPresented: $showMovePicker) {
             AlbumPickerView(
                 existingIDs: [],
@@ -263,7 +268,7 @@ struct DetailScreen: View {
                 onConfirm: { _ in },
                 onSelect: moveCurrentPhoto(to:)
             )
-            .presentationDragIndicator(.hidden)
+            .punctumDialogPresentation()
         }
         .background(PunctumTheme.ink)
     }

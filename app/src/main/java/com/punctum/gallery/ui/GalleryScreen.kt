@@ -209,11 +209,16 @@ private fun OriginalRatioRow(
                 photo.thumbnailPath,
                 photo.stillImageByteCount,
             ) {
+                val systemThumbnailKey =
+                    "gallery-system-thumb:${photo.uri}:${photo.modifiedMillis}"
+                val highQualityThumbnailKey = photo.thumbnailPath?.let { path ->
+                    "gallery-hq-thumb:${photo.uri}:$path"
+                }
                 ImageRequest.Builder(context)
                     .data(PhotoStill.forList(photo))
-                    .memoryCacheKey("gallery-thumb:${photo.uri}")
-                    .diskCacheKey("gallery-thumb:${photo.uri}")
-                    .placeholderMemoryCacheKey("gallery-thumb:${photo.uri}")
+                    .memoryCacheKey(highQualityThumbnailKey ?: systemThumbnailKey)
+                    .diskCacheKey(highQualityThumbnailKey ?: systemThumbnailKey)
+                    .placeholderMemoryCacheKey(systemThumbnailKey)
                     .size(900)
                     .crossfade(false)
                     .build()

@@ -151,11 +151,13 @@ internal fun DetailScreen(
     photos: List<Photo>,
     startIndex: Int,
     currentAlbumKey: String?,
+    availableSystemAlbums: List<SystemAlbum>?,
     completedMove: CompletedPhotoMove?,
     moveError: String?,
     onDelete: (Photo) -> Unit,
     onClose: () -> Unit,
     onWarmImages: (Int) -> Unit,
+    onRequestSystemAlbums: () -> Unit,
     onMovePhoto: (Photo, SystemAlbum) -> Unit,
     onAcknowledgeMove: () -> Unit,
     onClearMoveError: () -> Unit,
@@ -181,15 +183,30 @@ internal fun DetailScreen(
     var deleteCommitProgress by remember { mutableStateOf(0f) }
     var committedDragProgress by remember { mutableStateOf(0f) }
     var deleteTransitionLocked by remember { mutableStateOf(false) }
+    var pendingDeletedUris by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val visiblePhotos = photos.filterNot { it.uri.toString() in pendingDeletedUris }
     val deleteLocked = rememberUpdatedState(deleteTransitionLocked)
     val displayedDetailUris = remember { mutableSetOf<String>() }
     val deleteVisible = deleteDragProgress > 0f || deleteCommitProgress > 0f
     val armed = deleteTransitionLocked || deleteDragProgress >= DELETE_ARM_PROGRESS
+
+    if (visiblePhotos.isEmpty()) {
+        LaunchedEffect(Unit) { onClose() }
+        Box(Modifier.fillMaxSize().background(Ink))
+        return
+    }
+
     val pagerState = rememberPagerState(
-        initialPage = startIndex.coerceIn(0, photos.size - 1),
-    ) { photos.size }
-    val currentPhoto = photos.getOrNull(pagerState.currentPage)
-    val nextDeletePhoto = photos.getOrNull((pagerState.currentPage + 1).coerceAtMost(photos.lastIndex))
+        initialPage = startIndex.coerceIn(0, visiblePhotos.size - 1),
+    ) { visiblePhotos.size }
+    val currentPage = pagerState.currentPage.coerceAtMost(visiblePhotos.lastIndex)
+    val currentPhoto = visiblePhotos.getOrNull(currentPage)
+    val deleteReplacementIndex = when {
+        currentPage < visiblePhotos.lastIndex -> currentPage + 1
+        currentPage > 0 -> currentPage - 1
+        else -> null
+    }
+    val nextDeletePhoto = deleteReplacementIndex?.let(visiblePhotos::getOrNull)
     var activeDeletePhoto by remember { mutableStateOf<Photo?>(null) }
     var settlingPhoto by remember { mutableStateOf<Photo?>(null) }
     var livePlaybackActive by remember { mutableStateOf(false) }
@@ -205,10 +222,18 @@ internal fun DetailScreen(
         }
     }
 
-    LaunchedEffect(pagerState, photos) {
-        onWarmImages(pagerState.currentPage)
+    LaunchedEffect(pagerState, visiblePhotos) {
+        visiblePhotos.getOrNull(pagerState.currentPage)?.let { photo ->
+            photos.indexOfFirst { it.uri == photo.uri }
+                .takeIf { it >= 0 }
+                ?.let(onWarmImages)
+        }
         snapshotFlow { pagerState.currentPage }.collect { page ->
-            onWarmImages(page)
+            visiblePhotos.getOrNull(page)?.let { photo ->
+                photos.indexOfFirst { it.uri == photo.uri }
+                    .takeIf { it >= 0 }
+                    ?.let(onWarmImages)
+            }
         }
     }
 
@@ -296,7 +321,7 @@ internal fun DetailScreen(
             .fillMaxSize()
             .background(Ink)
             .onSizeChanged { detailRootHeightPx = it.height.toFloat() }
-            .pointerInput(photos, pagerState.currentPage) {
+            .pointerInput(visiblePhotos, pagerState.currentPage) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     if (deleteLocked.value) return@awaitEachGesture
@@ -317,7 +342,7 @@ internal fun DetailScreen(
                         if (!change.pressed) {
                             if (deletingGesture) {
                                 val currentPage = pagerState.currentPage
-                                val targetPhoto = photos.getOrNull(currentPage)
+                                val targetPhoto = visiblePhotos.getOrNull(currentPage)
                                 val currentProgress = deleteDragProgress
                                 scope.launch {
                                     if (currentProgress >= DELETE_ARM_PROGRESS) {
@@ -340,6 +365,7 @@ internal fun DetailScreen(
                                         }
                                         settlingPhoto = nextDeletePhoto
                                         targetPhoto?.let { photo ->
+                                            pendingDeletedUris = pendingDeletedUris + photo.uri.toString()
                                             onDelete(photo)
                                             hostView.performDeleteHaptic()
                                         }
@@ -374,7 +400,7 @@ internal fun DetailScreen(
 
                         if (deletingGesture) {
                             if (activeDeletePhoto == null) {
-                                activeDeletePhoto = photos.getOrNull(pagerState.currentPage)
+                                activeDeletePhoto = visiblePhotos.getOrNull(pagerState.currentPage)
                             }
                             deleteDragProgress = mapDeleteDragProgress(upwardDistance / deleteThreshold)
                             change.consume()
@@ -392,7 +418,10 @@ internal fun DetailScreen(
             Box(Modifier.fillMaxSize()) {
                 ImmersivePhoto(
                     photo = nextDeletePhoto,
-                    displayNumber = (pagerState.currentPage + 2).coerceAtMost(photos.size),
+                    displayNumber = min(
+                        deleteReplacementIndex ?: pagerState.currentPage,
+                        pagerState.currentPage,
+                    ) + 1,
                     onTapLeft = {},
                     onTapRight = {},
                     onToggleControls = {},
@@ -420,7 +449,7 @@ internal fun DetailScreen(
             ) {
                 ImmersivePhoto(
                     photo = moveTo,
-                    displayNumber = (pagerState.currentPage + 2).coerceAtMost(photos.size),
+                    displayNumber = (pagerState.currentPage + 2).coerceAtMost(visiblePhotos.size),
                     onTapLeft = {},
                     onTapRight = {},
                     onToggleControls = {},
@@ -456,7 +485,7 @@ internal fun DetailScreen(
                         .background(Ink),
                 ) {
                     ImmersivePhoto(
-                        photo = photos[page],
+                        photo = visiblePhotos[page],
                         displayNumber = page + 1,
                         onTapLeft = {
                             if (pagerState.currentPage > 0) {
@@ -466,15 +495,15 @@ internal fun DetailScreen(
                             }
                         },
                         onTapRight = {
-                            if (pagerState.currentPage < photos.lastIndex) {
+                            if (pagerState.currentPage < visiblePhotos.lastIndex) {
                                 scope.launch(start = CoroutineStart.UNDISPATCHED) {
                                     pagerState.scrollToPage(pagerState.currentPage + 1)
                                 }
                             }
                         },
                         onToggleControls = { controlsVisible = !controlsVisible },
-                        animateImage = photos[page].uri.toString() !in displayedDetailUris,
-                        onImageVisible = { displayedDetailUris.add(photos[page].uri.toString()) },
+                        animateImage = visiblePhotos[page].uri.toString() !in displayedDetailUris,
+                        onImageVisible = { displayedDetailUris.add(visiblePhotos[page].uri.toString()) },
                         onLivePlaybackChanged = { livePlaybackActive = it },
                     )
                 }
@@ -529,7 +558,7 @@ internal fun DetailScreen(
             ) {
                 ImmersivePhoto(
                     photo = photo,
-                    displayNumber = (pagerState.currentPage + 1).coerceAtMost(photos.size),
+                    displayNumber = (pagerState.currentPage + 1).coerceAtMost(visiblePhotos.size),
                     onTapLeft = {},
                     onTapRight = {},
                     onToggleControls = {},
@@ -582,7 +611,7 @@ internal fun DetailScreen(
                     exit = fadeOut(tween(120)),
                 ) {
                     Text(
-                        "将照片删除到系统相册回收站",
+                        "松手标记删除，退出大图页时统一确认",
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                         color = Bone.copy(alpha = 0.78f),
                         modifier = Modifier
@@ -677,7 +706,9 @@ internal fun DetailScreen(
     if (showMovePicker) {
         currentPhoto?.let { photo ->
             MoveAlbumPickerDialog(
+                albums = availableSystemAlbums,
                 currentAlbumKey = currentAlbumKey,
+                onRequestAlbums = onRequestSystemAlbums,
                 onPick = { album ->
                     showMovePicker = false
                     onMovePhoto(photo, album)

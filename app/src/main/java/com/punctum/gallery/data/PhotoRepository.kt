@@ -50,7 +50,11 @@ object PhotoRepository {
     sealed interface DeleteResult {
         data object Deleted : DeleteResult
         data object NeedsMediaManagementPermission : DeleteResult
-        data class NeedsUserAction(val pendingIntent: PendingIntent) : DeleteResult
+        data class NeedsUserAction(
+            val pendingIntent: PendingIntent,
+            val pendingUris: Set<Uri>? = null,
+        ) : DeleteResult
+        data class PartialFailure(val undeletedUris: Set<Uri>) : DeleteResult
         data object Failed : DeleteResult
     }
 
@@ -148,7 +152,7 @@ object PhotoRepository {
                     fallbackTime = file.takenMillis ?: file.modifiedMillis,
                     fileSizeBytes = file.sizeBytes,
                     modifiedMillis = file.modifiedMillis,
-                    thumbnailPath = GalleryImageCache.thumbnailPath(
+                    thumbnailPath = GalleryImageCache.cachedThumbnailPath(
                         context,
                         gallery.uri.toString(),
                         file.uri,
@@ -174,7 +178,7 @@ object PhotoRepository {
                     cachedMatchesFile(cached, file) &&
                     cached.metadataVersion >= METADATA_VERSION
                 ) {
-                    val targetThumb = GalleryImageCache.thumbnailPath(context, galleryKey, file.uri)
+                    val targetThumb = GalleryImageCache.cachedThumbnailPath(context, galleryKey, file.uri)
                     val resolvedTakenMillis = cached.takenMillis
                         .takeIf { it > 0L }
                         ?: file.takenMillis
@@ -185,9 +189,7 @@ object PhotoRepository {
                         fileSizeBytes = file.sizeBytes,
                         takenMillis = resolvedTakenMillis,
                         dateTaken = formatDate(resolvedTakenMillis),
-                        thumbnailPath = cached.thumbnailPath
-                            ?.takeIf { it == targetThumb }
-                            ?: targetThumb,
+                        thumbnailPath = targetThumb,
                         motionPhotoVideoLength = if (file.motionPhotoChecked) {
                             file.motionPhotoVideoLength
                         } else {
@@ -210,7 +212,7 @@ object PhotoRepository {
                         fallbackTime = file.takenMillis ?: file.modifiedMillis,
                         fileSizeBytes = file.sizeBytes,
                         modifiedMillis = file.modifiedMillis,
-                        thumbnailPath = GalleryImageCache.thumbnailPath(context, galleryKey, file.uri),
+                        thumbnailPath = GalleryImageCache.cachedThumbnailPath(context, galleryKey, file.uri),
                         motionPhotoVideoLength = file.motionPhotoVideoLength,
                         motionPhotoPresentationTimestampUs =
                             file.motionPhotoPresentationTimestampUs,
@@ -382,6 +384,71 @@ object PhotoRepository {
                 DeleteResult.Failed
             }
         }
+
+    /**
+     * 大图页退出确认后的批量删除。现代 Android 优先合并为一次系统回收站请求；
+     * 已获得媒体管理权限时直接逐项移入回收站，失败项再交给系统统一确认。
+     */
+    suspend fun deletePhotos(
+        context: Context,
+        galleryTreeUri: Uri,
+        photos: List<Photo>,
+    ): DeleteResult = withContext(Dispatchers.IO) {
+        val uniquePhotos = photos.distinctBy { it.uri }
+        if (uniquePhotos.isEmpty()) return@withContext DeleteResult.Deleted
+        if (uniquePhotos.size == 1) {
+            return@withContext deletePhoto(context, galleryTreeUri, uniquePhotos.first())
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return@withContext DeleteResult.Failed
+        }
+
+        val mediaUris = uniquePhotos.mapNotNull { it.uri.toMediaStoreUri(context) }.distinct()
+        if (mediaUris.size != uniquePhotos.size) {
+            return@withContext DeleteResult.Failed
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && MediaStore.canManageMedia(context)) {
+                val failedUris = mediaUris.filterNot { mediaUri ->
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_TRASHED, 1)
+                    }
+                    runCatching {
+                        context.contentResolver.update(mediaUri, values, null, null)
+                    }.getOrDefault(0) > 0
+                }
+                if (failedUris.isEmpty()) {
+                    DeleteResult.Deleted
+                } else {
+                    runCatching {
+                        DeleteResult.NeedsUserAction(
+                            pendingIntent = MediaStore.createTrashRequest(
+                                context.contentResolver,
+                                failedUris,
+                                true,
+                            ),
+                            pendingUris = failedUris.toSet(),
+                        )
+                    }.getOrElse {
+                        DeleteResult.PartialFailure(failedUris.toSet())
+                    }
+                }
+            } else {
+                DeleteResult.NeedsUserAction(
+                    pendingIntent = MediaStore.createTrashRequest(
+                        context.contentResolver,
+                        mediaUris,
+                        true,
+                    ),
+                    pendingUris = mediaUris.toSet(),
+                )
+            }
+        } catch (_: Exception) {
+            DeleteResult.Failed
+        }
+    }
 
     suspend fun movePhoto(
         context: Context,

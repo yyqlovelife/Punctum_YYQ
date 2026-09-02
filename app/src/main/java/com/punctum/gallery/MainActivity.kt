@@ -333,11 +333,13 @@ private fun PunctumApp(vm: GalleryViewModel) {
                 photos = vm.photos,
                 startIndex = detailIndex,
                 currentAlbumKey = currentKey,
+                availableSystemAlbums = vm.systemAlbums,
                 completedMove = vm.completedMove,
                 moveError = vm.moveError,
-                onDelete = vm::deletePhoto,
+                onDelete = vm::queueDetailDeletion,
                 onClose = vm::closeDetail,
                 onWarmImages = vm::warmDetailImages,
+                onRequestSystemAlbums = vm::loadSystemAlbums,
                 onMovePhoto = vm::movePhoto,
                 onAcknowledgeMove = vm::acknowledgeCompletedMove,
                 onClearMoveError = vm::clearMoveError,
@@ -346,7 +348,9 @@ private fun PunctumApp(vm: GalleryViewModel) {
 
         if (showAlbumPicker) {
             AlbumPickerDialog(
+                albums = vm.systemAlbums,
                 existingAlbumKeys = vm.galleries.map { it.uri.toString() }.toSet(),
+                onRequestAlbums = vm::loadSystemAlbums,
                 onConfirm = { albums ->
                     vm.addSystemAlbums(albums)
                     showAlbumPicker = false
@@ -378,6 +382,39 @@ private fun PunctumApp(vm: GalleryViewModel) {
             vm.showSwitcher -> vm.closeSwitcher()
             vm.currentGallery != null -> vm.goHome()
         }
+    }
+
+    vm.pendingDetailDeleteConfirmation?.let { pendingPhotos ->
+        AlertDialog(
+            onDismissRequest = vm::cancelDetailDeletion,
+            confirmButton = {
+                TextButton(onClick = vm::confirmDetailDeletion) {
+                    Text("确定删除", color = Color(0xFFE24646))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::cancelDetailDeletion) {
+                    Text("取消", color = Muted)
+                }
+            },
+            title = {
+                Text(
+                    "本次删除 ${pendingPhotos.size} 项",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Bone,
+                )
+            },
+            text = {
+                Text(
+                    "确定删除后，所选照片将移入系统相册回收站",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Muted,
+                )
+            },
+            containerColor = Surface1,
+            titleContentColor = Bone,
+            textContentColor = Muted,
+        )
     }
 
     renameTarget?.let { target ->

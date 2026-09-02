@@ -34,7 +34,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     private var overviewRefreshJob: Job? = null
     private var dataRefreshJob: Job? = null
     private var foregroundSyncJob: Job? = null
-    private var pendingDeletePhoto: Photo? = null
+    private var systemAlbumsJob: Job? = null
+    private var pendingDeletePhotos: List<Photo> = emptyList()
+    private val queuedDetailDeletePhotos = mutableListOf<Photo>()
     private var pendingMovePhoto: Photo? = null
     private var pendingMoveDestination: SystemAlbum? = null
     private var moveInProgress: Photo? = null
@@ -57,6 +59,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var pendingDeleteConfirmation by mutableStateOf<PendingIntent?>(null)
         private set
+    var pendingDetailDeleteConfirmation by mutableStateOf<List<Photo>?>(null)
+        private set
     var pendingMediaManagementPermission by mutableStateOf(false)
         private set
     var pendingMoveConfirmation by mutableStateOf<PendingIntent?>(null)
@@ -68,6 +72,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     var homeToast by mutableStateOf<String?>(null)
         private set
     var pendingHomeScrollIndex by mutableStateOf<Int?>(null)
+        private set
+    var systemAlbums by mutableStateOf<List<SystemAlbum>?>(null)
         private set
 
     // 覆层状态
@@ -81,6 +87,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 冷启动：恢复仍有效授权的画廊，并默认停留在邀请卡首页。 */
     fun start() {
+        loadSystemAlbums()
         if (galleries.isNotEmpty()) return
         invitationStyle = InvitationCardStyle.from(store.invitationStyleId)
         homeSubtitle = HOME_SUBTITLES.random(Random(System.currentTimeMillis()))
@@ -96,6 +103,13 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             store.saveGalleries(stored)
             overviews = store.loadOverviewCache(stored)
             refreshOverviews(force = true)
+        }
+    }
+
+    fun loadSystemAlbums() {
+        if (systemAlbums != null || systemAlbumsJob?.isActive == true) return
+        systemAlbumsJob = viewModelScope.launch {
+            systemAlbums = PhotoRepository.listDcimAndPicturesAlbums(getApplication())
         }
     }
 
@@ -437,52 +451,108 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             when (val result = PhotoRepository.deletePhoto(getApplication(), gallery.uri, photo)) {
                 PhotoRepository.DeleteResult.Deleted -> Unit
                 PhotoRepository.DeleteResult.NeedsMediaManagementPermission -> {
-                    pendingDeletePhoto = photo
+                    pendingDeletePhotos = listOf(photo)
                     pendingMediaManagementPermission = true
                 }
                 PhotoRepository.DeleteResult.Failed -> {
-                    clearDeleting(photo)
-                    refreshCurrentData()
+                    restorePhotosToState(listOf(photo))
                 }
                 is PhotoRepository.DeleteResult.NeedsUserAction -> {
-                    pendingDeletePhoto = photo
+                    pendingDeletePhotos = listOf(photo)
                     pendingDeleteConfirmation = result.pendingIntent
+                }
+                is PhotoRepository.DeleteResult.PartialFailure -> {
+                    restorePhotosToState(
+                        listOf(photo).filter { it.uri in result.undeletedUris },
+                    )
+                }
+            }
+        }
+    }
+
+    fun queueDetailDeletion(photo: Photo) {
+        if (queuedDetailDeletePhotos.none { it.uri == photo.uri }) {
+            queuedDetailDeletePhotos += photo
+        }
+    }
+
+    fun confirmDetailDeletion() {
+        val photosToDelete = pendingDetailDeleteConfirmation ?: return
+        pendingDetailDeleteConfirmation = null
+        photosToDelete.forEach(::markDeleting)
+        removePhotosFromState(photosToDelete)
+        performDetailDelete(photosToDelete)
+    }
+
+    fun cancelDetailDeletion() {
+        if (pendingDetailDeleteConfirmation == null) return
+        pendingDetailDeleteConfirmation = null
+    }
+
+    private fun performDetailDelete(photosToDelete: List<Photo>) {
+        viewModelScope.launch {
+            val gallery = currentGallery
+            if (gallery == null) {
+                restorePhotosToState(photosToDelete)
+                return@launch
+            }
+            when (
+                val result = PhotoRepository.deletePhotos(
+                    getApplication(),
+                    gallery.uri,
+                    photosToDelete,
+                )
+            ) {
+                PhotoRepository.DeleteResult.Deleted -> Unit
+                PhotoRepository.DeleteResult.NeedsMediaManagementPermission -> {
+                    pendingDeletePhotos = photosToDelete
+                    pendingMediaManagementPermission = true
+                }
+                PhotoRepository.DeleteResult.Failed -> {
+                    restorePhotosToState(photosToDelete)
+                }
+                is PhotoRepository.DeleteResult.NeedsUserAction -> {
+                    pendingDeletePhotos = result.pendingUris?.let { pendingUris ->
+                        photosToDelete.filter { it.uri in pendingUris }
+                    } ?: photosToDelete
+                    pendingDeleteConfirmation = result.pendingIntent
+                }
+                is PhotoRepository.DeleteResult.PartialFailure -> {
+                    restorePhotosToState(
+                        photosToDelete.filter { it.uri in result.undeletedUris },
+                    )
                 }
             }
         }
     }
 
     fun onMediaManagementPermissionHandled(granted: Boolean) {
-        val photo = pendingDeletePhoto
-        pendingDeletePhoto = null
+        val photos = pendingDeletePhotos
+        pendingDeletePhotos = emptyList()
         pendingMediaManagementPermission = false
-        if (photo == null) return
+        if (photos.isEmpty()) return
         if (granted) {
-            markDeleting(photo)
-            performDelete(photo)
+            performDetailDelete(photos)
         } else {
-            clearDeleting(photo)
-            refreshCurrentData()
+            restorePhotosToState(photos)
         }
     }
 
     fun onDeleteConfirmationHandled(confirmed: Boolean) {
-        val photo = pendingDeletePhoto
-        pendingDeletePhoto = null
+        val photos = pendingDeletePhotos
+        pendingDeletePhotos = emptyList()
         pendingDeleteConfirmation = null
-        if (confirmed && photo != null) {
-            markDeleting(photo)
-            removePhotoFromState(photo)
-        } else if (photo != null) {
-            clearDeleting(photo)
-            refreshCurrentData()
+        if (!confirmed && photos.isNotEmpty()) {
+            restorePhotosToState(photos)
         }
     }
 
     fun movePhoto(photo: Photo, destination: SystemAlbum) {
         if (destination.uri.toString() == currentUri) return
-        val index = photos.indexOfFirst { it.uri == photo.uri }
-        val next = if (index >= 0) photos.getOrNull(index + 1) else null
+        val queuedUris = queuedDetailDeletePhotos.map { it.uri }.toSet()
+        val visiblePhotos = photos.filterNot { it.uri in queuedUris }
+        val index = visiblePhotos.indexOfFirst { it.uri == photo.uri }
+        val next = if (index >= 0) visiblePhotos.getOrNull(index + 1) else null
         moveInProgress = photo
         viewModelScope.launch {
             when (val result = PhotoRepository.movePhoto(getApplication(), photo, destination)) {
@@ -543,7 +613,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         return incoming.map { new ->
             val old = currentByUri[new.uri]
             if (old != null && old.width == new.width && old.height == new.height) {
-                if (old.thumbnailPath == null && new.thumbnailPath != null) {
+                if (old.thumbnailPath != new.thumbnailPath) {
                     old.copy(thumbnailPath = new.thumbnailPath)
                 } else {
                     old
@@ -568,6 +638,30 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                 else -> index
             }
         }
+    }
+
+    private fun removePhotosFromState(photosToRemove: List<Photo>) {
+        val uriKey = currentUri ?: return
+        val removedUris = photosToRemove.map { it.uri }.toSet()
+        if (removedUris.isEmpty()) return
+        val updated = photos.filterNot { it.uri in removedUris }
+        photos = updated
+        photoCache[uriKey] = updated
+        store.savePhotoCache(uriKey, updated)
+        cacheOverview(uriKey, updated)
+    }
+
+    private fun restorePhotosToState(photosToRestore: List<Photo>) {
+        if (photosToRestore.isEmpty()) return
+        photosToRestore.forEach(::clearDeleting)
+        val uriKey = currentUri ?: return
+        val restored = (photos + photosToRestore)
+            .distinctBy { it.uri }
+            .sortedWith(PHOTO_NEWEST_FIRST)
+        photos = restored
+        photoCache[uriKey] = restored
+        store.savePhotoCache(uriKey, restored)
+        cacheOverview(uriKey, restored)
     }
 
     private fun isVisiblePhotoListFrozen(): Boolean =
@@ -644,8 +738,19 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         "${photo.name}|${photo.fileSizeBytes}"
 
     fun closeSwitcher() { showSwitcher = false }
-    fun openDetail(index: Int) { selectedIndex = index }
-    fun closeDetail() { selectedIndex = null }
+
+    fun openDetail(index: Int) {
+        queuedDetailDeletePhotos.clear()
+        selectedIndex = index
+    }
+
+    fun closeDetail() {
+        selectedIndex = null
+        val pending = queuedDetailDeletePhotos.distinctBy { it.uri }
+        queuedDetailDeletePhotos.clear()
+        if (pending.isEmpty()) return
+        pendingDetailDeleteConfirmation = pending
+    }
 
     fun clearMoveError() { moveError = null }
 

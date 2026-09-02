@@ -75,10 +75,10 @@ struct AlbumPickerView: View {
                     }
                 }
             }
-            .background(PunctumTheme.ink.ignoresSafeArea())
+            .background(PunctumTheme.dialogSurface.ignoresSafeArea())
             .navigationTitle(isMovePicker ? "移动到图集" : "选择图集")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(PunctumTheme.ink, for: .navigationBar)
+            .toolbarBackground(PunctumTheme.dialogSurface, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -99,6 +99,7 @@ struct AlbumPickerView: View {
                 }
             }
         }
+        .punctumDialogSurface()
         .task {
             albums = PhotoLibraryService.shared.fetchAlbums(includingEmpty: isMovePicker)
         }

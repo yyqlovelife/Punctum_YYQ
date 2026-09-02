@@ -321,6 +321,34 @@ struct HairlineDivider: View {
     }
 }
 
+struct PunctumDialogBackdrop: View {
+    var body: some View {
+        Color.black
+            .opacity(0.22)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .transition(.opacity)
+    }
+}
+
+extension View {
+    func punctumDialogSurface() -> some View {
+        background(PunctumTheme.dialogSurface.ignoresSafeArea())
+            .overlay {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .stroke(PunctumTheme.bone.opacity(0.12), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(0.60), radius: 24, y: 8)
+    }
+
+    func punctumDialogPresentation() -> some View {
+        presentationBackground(PunctumTheme.dialogSurface)
+            .presentationCornerRadius(28)
+            .presentationDragIndicator(.hidden)
+    }
+}
+
 struct FrameButton: View {
     let text: String
     let action: () -> Void

@@ -4,6 +4,7 @@ import UIKit
 enum PunctumTheme {
     static let ink = Color(red: 10 / 255, green: 10 / 255, blue: 10 / 255)
     static let surface = Color(red: 20 / 255, green: 20 / 255, blue: 20 / 255)
+    static let dialogSurface = Color(red: 24 / 255, green: 23 / 255, blue: 21 / 255)
     static let bone = Color(red: 237 / 255, green: 232 / 255, blue: 221 / 255)
     static let muted = Color(red: 138 / 255, green: 129 / 255, blue: 112 / 255)
     static let gold = Color(red: 200 / 255, green: 162 / 255, blue: 75 / 255)

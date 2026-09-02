@@ -96,6 +96,11 @@ struct SwitcherScreen: View {
             .background(PunctumTheme.ink)
             .ignoresSafeArea(edges: .top)
         }
+        .overlay {
+            if showSort {
+                PunctumDialogBackdrop()
+            }
+        }
         .sheet(isPresented: $showSort) {
             SortGalleriesSheet(
                 galleries: galleries,
@@ -107,7 +112,7 @@ struct SwitcherScreen: View {
                 }
             )
             .presentationDetents([.medium, .large])
-            .presentationBackground(PunctumTheme.ink)
+            .punctumDialogPresentation()
         }
     }
 
@@ -1053,7 +1058,7 @@ private struct SortGalleriesSheet: View {
                 }
             }
         }
-        .background(PunctumTheme.ink.ignoresSafeArea())
+        .punctumDialogSurface()
     }
 
     private func iconButton(_ name: String, enabled: Bool, action: @escaping () -> Void) -> some View {

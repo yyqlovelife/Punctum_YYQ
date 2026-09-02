@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
@@ -26,10 +25,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.punctum.gallery.data.PhotoRepository
 import com.punctum.gallery.model.SystemAlbum
 import com.punctum.gallery.ui.theme.Bone
 import com.punctum.gallery.ui.theme.Gold
@@ -39,58 +36,48 @@ import com.punctum.gallery.ui.theme.galleryTitleFont
 
 @Composable
 internal fun AlbumPickerDialog(
+    albums: List<SystemAlbum>?,
     existingAlbumKeys: Set<String>,
+    onRequestAlbums: () -> Unit,
     onConfirm: (List<SystemAlbum>) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
-    var albums by remember { mutableStateOf<List<SystemAlbum>?>(null) }
     var selectedKeys by remember { mutableStateOf(setOf<String>()) }
 
-    LaunchedEffect(Unit) {
-        albums = PhotoRepository.listDcimAndPicturesAlbums(context)
+    LaunchedEffect(albums) {
+        if (albums == null) onRequestAlbums()
     }
+    val loaded = albums ?: return
 
-    val loaded = albums
     val selectableKeys = remember(loaded, existingAlbumKeys) {
-        loaded.orEmpty()
+        loaded
             .map { it.uri.toString() }
             .filterNot { it in existingAlbumKeys }
             .toSet()
     }
     val confirmEnabled = selectedKeys.any { it in selectableKeys }
 
-    AlertDialog(
+    PunctumOverlayDialog(
+        title = "选择图集",
         onDismissRequest = onDismiss,
-        confirmButton = {
+        animateScrim = false,
+        actions = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = Muted)
+            }
             TextButton(
                 enabled = confirmEnabled,
                 onClick = {
-                    val chosen = loaded.orEmpty().filter { it.uri.toString() in selectedKeys }
+                    val chosen = loaded.filter { it.uri.toString() in selectedKeys }
                     onConfirm(chosen)
                 },
             ) {
                 Text("确定", color = if (confirmEnabled) Gold else Muted)
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消", color = Muted)
-            }
-        },
-        title = {
-            Text("选择图集", style = MaterialTheme.typography.titleLarge, color = Bone)
-        },
-        text = {
-            when (loaded) {
-                null -> {
-                    Text(
-                        "正在读取 DCIM 与 Pictures…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Muted,
-                    )
-                }
-                emptyList<SystemAlbum>() -> {
+        content = {
+            when {
+                loaded.isEmpty() -> {
                     Text(
                         "没有找到 DCIM 或 Pictures 下的图集。",
                         style = MaterialTheme.typography.bodyMedium,
@@ -124,7 +111,6 @@ internal fun AlbumPickerDialog(
                 }
             }
         },
-        containerColor = Ink,
     )
 }
 
@@ -178,39 +164,28 @@ private fun AlbumPickerRow(
 
 @Composable
 internal fun MoveAlbumPickerDialog(
+    albums: List<SystemAlbum>?,
     currentAlbumKey: String?,
+    onRequestAlbums: () -> Unit,
     onPick: (SystemAlbum) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
-    var albums by remember { mutableStateOf<List<SystemAlbum>?>(null) }
-
-    LaunchedEffect(Unit) {
-        albums = PhotoRepository.listDcimAndPicturesAlbums(context)
+    LaunchedEffect(albums) {
+        if (albums == null) onRequestAlbums()
     }
+    val loaded = albums ?: return
 
-    val loaded = albums
-    AlertDialog(
+    PunctumOverlayDialog(
+        title = "移动到图集",
         onDismissRequest = onDismiss,
-        confirmButton = {},
-        dismissButton = {
+        actions = {
             TextButton(onClick = onDismiss) {
                 Text("取消", color = Muted)
             }
         },
-        title = {
-            Text("移动到图集", style = MaterialTheme.typography.titleLarge, color = Bone)
-        },
-        text = {
-            when (loaded) {
-                null -> {
-                    Text(
-                        "正在读取 DCIM 与 Pictures…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Muted,
-                    )
-                }
-                emptyList<SystemAlbum>() -> {
+        content = {
+            when {
+                loaded.isEmpty() -> {
                     Text(
                         "没有找到 DCIM 或 Pictures 下的图集。",
                         style = MaterialTheme.typography.bodyMedium,
@@ -237,7 +212,6 @@ internal fun MoveAlbumPickerDialog(
                 }
             }
         },
-        containerColor = Ink,
     )
 }
 

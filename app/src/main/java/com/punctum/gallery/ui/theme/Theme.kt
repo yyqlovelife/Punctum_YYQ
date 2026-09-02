@@ -14,6 +14,7 @@ import com.punctum.gallery.R
 
 val Ink = Color(0xFF0A0A0A)
 val Surface1 = Color(0xFF141414)
+val DialogSurface = Color(0xFF181715)
 val Bone = Color(0xFFEDE8DD)
 val Muted = Color(0xFF8A8170)
 val Gold = Color(0xFFC8A24B)

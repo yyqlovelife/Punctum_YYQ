@@ -44,7 +44,6 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.outlined.Style
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -946,13 +945,11 @@ private fun SortDialog(
     onAdd: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    PunctumOverlayDialog(
+        title = "调整图集画廊",
         onDismissRequest = onDismiss,
-        confirmButton = {},
-        title = {
-            Text("调整图集画廊", style = MaterialTheme.typography.titleLarge, color = Bone)
-        },
-        text = {
+        actions = {},
+        content = {
             Column {
                 overviews.forEachIndexed { index, overview ->
                     Row(
@@ -994,7 +991,6 @@ private fun SortDialog(
                 }
             }
         },
-        containerColor = Ink,
     )
 }
 

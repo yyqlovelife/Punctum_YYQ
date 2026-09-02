@@ -54,6 +54,11 @@ struct RootView: View {
                 )
                 .zIndex(20)
             }
+
+            if model.showAlbumPicker {
+                PunctumDialogBackdrop()
+                    .zIndex(30)
+            }
         }
         .animation(.easeOut(duration: 0.16), value: model.showSwitcher)
         .sheet(isPresented: $model.showAlbumPicker) {
@@ -61,7 +66,7 @@ struct RootView: View {
                 existingIDs: Set(model.galleries.map(\.id)),
                 onConfirm: model.addAlbums
             )
-                .presentationDragIndicator(.hidden)
+                .punctumDialogPresentation()
         }
         .alert("重命名画廊", isPresented: renamePresented) {
             TextField("画廊名称", text: $renameText)

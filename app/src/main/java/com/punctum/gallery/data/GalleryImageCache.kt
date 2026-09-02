@@ -38,10 +38,15 @@ object GalleryImageCache {
         withContext(Dispatchers.IO) {
             val file = thumbFile(context, galleryKey, uri)
             if (file.exists() && file.length() > 0L) return@withContext file.absolutePath
+
+            val legacy = legacyThumbFile(context, galleryKey, uri)
+            if (legacy.isUsableLegacyThumbnail()) return@withContext legacy.absolutePath
+
             val bitmap = loadBitmap(context, uri, THUMB_SIZE) ?: return@withContext null
             file.parentFile?.mkdirs()
             file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 92, it) }
             bitmap.recycle()
+            if (legacy.exists()) legacy.delete()
             file.absolutePath
         }
 
@@ -78,8 +83,14 @@ object GalleryImageCache {
             }
         }
 
-    fun thumbnailPath(context: Context, galleryKey: String, uri: Uri): String =
-        thumbFile(context, galleryKey, uri).absolutePath
+    /** 只返回已经生成好的高清缩略图；低清系统预览不写入这个结果。 */
+    fun cachedThumbnailPath(context: Context, galleryKey: String, uri: Uri): String? {
+        val current = thumbFile(context, galleryKey, uri)
+        if (current.exists() && current.length() > 0L) return current.absolutePath
+        return legacyThumbFile(context, galleryKey, uri)
+            .takeIf { it.isUsableLegacyThumbnail() }
+            ?.absolutePath
+    }
 
     private fun buildPostcardCover(context: Context, galleryKey: String, uris: List<Uri>): String? {
         if (uris.isEmpty()) return null
@@ -140,7 +151,6 @@ object GalleryImageCache {
         loadBitmapBlocking(context, uri, size)
 
     private fun loadBitmapBlocking(context: Context, uri: Uri, size: Int): Bitmap? {
-        systemThumbnail(context, uri)?.let { return it }
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val source = ImageDecoder.createSource(context.contentResolver, uri)
@@ -283,7 +293,20 @@ object GalleryImageCache {
     }
 
     private fun thumbFile(context: Context, galleryKey: String, uri: Uri): File =
+        File(
+            galleryThumbDir(context, galleryKey),
+            "${safeKey(uri.toString())}-hq$HIGH_QUALITY_THUMBNAIL_VERSION.jpg",
+        )
+
+    private fun legacyThumbFile(context: Context, galleryKey: String, uri: Uri): File =
         File(galleryThumbDir(context, galleryKey), "${safeKey(uri.toString())}.jpg")
+
+    private fun File.isUsableLegacyThumbnail(): Boolean {
+        if (!exists() || length() <= 0L) return false
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(absolutePath, bounds)
+        return max(bounds.outWidth, bounds.outHeight) >= MIN_HIGH_QUALITY_LONG_EDGE
+    }
 
     private fun galleryThumbDir(context: Context, galleryKey: String): File =
         File(context.cacheDir, "punctum_thumbnails_v2/${safeKey(galleryKey)}")
@@ -317,4 +340,6 @@ object GalleryImageCache {
     private const val MAX_TICKET_VALUE = 0.48f
     private const val MIN_GRAY_VALUE = 0.32f
     private const val MAX_GRAY_VALUE = 0.44f
+    private const val HIGH_QUALITY_THUMBNAIL_VERSION = 3
+    private const val MIN_HIGH_QUALITY_LONG_EDGE = 900
 }
