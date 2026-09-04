@@ -143,7 +143,7 @@ import kotlin.coroutines.resume
 private const val DELETE_ARM_PROGRESS = 0.72f
 private const val DELETE_DRAG_RESISTANCE = 0.14f
 private const val DELETE_DRAG_MAX_PROGRESS = 1.12f
-private const val DELETE_COMMIT_DURATION_MS = 300
+private const val DELETE_COMMIT_DURATION_MS = 200
 private const val DELETE_SETTLE_DURATION_MS = 50L
 
 @Composable

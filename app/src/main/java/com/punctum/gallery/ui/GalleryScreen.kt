@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -18,8 +19,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -340,6 +343,7 @@ private fun DeleteProgressBadge(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun GalleryHeader(
     gallery: Gallery,
     count: Int,
@@ -354,7 +358,9 @@ private fun GalleryHeader(
             .pointerInput(Unit) {
                 detectTapGestures(onDoubleTap = { onDoubleTapTop() })
             }
-            .statusBarsPadding()
+            // DetailScreen temporarily hides the status bar. Keep the gallery header's inset
+            // stable underneath it so the title does not jump down when the status bar returns.
+            .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
             .padding(start = 24.dp, end = 12.dp, top = 18.dp, bottom = 16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

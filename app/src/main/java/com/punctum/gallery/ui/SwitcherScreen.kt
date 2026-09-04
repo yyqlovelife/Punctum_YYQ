@@ -7,7 +7,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -31,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -40,8 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.DragHandle
 import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.outlined.Style
 import androidx.compose.material3.Icon
@@ -50,11 +52,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,6 +67,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -70,15 +76,20 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontSynthesis
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil.request.ImageRequest
 import java.io.File
 import com.punctum.gallery.R
@@ -88,7 +99,6 @@ import com.punctum.gallery.model.InvitationCardStyle
 import com.punctum.gallery.ui.theme.Bone
 import com.punctum.gallery.ui.theme.DetailSerif
 import com.punctum.gallery.ui.theme.Gold
-import com.punctum.gallery.ui.theme.Hairline
 import com.punctum.gallery.ui.theme.Ink
 import com.punctum.gallery.ui.theme.Muted
 import com.punctum.gallery.ui.theme.Surface1
@@ -96,6 +106,7 @@ import com.punctum.gallery.ui.theme.NotoSerifSc
 import com.punctum.gallery.ui.theme.galleryTitleFont
 import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
+import kotlin.random.Random
 
 @Composable
 internal fun SwitcherScreen(
@@ -117,6 +128,7 @@ internal fun SwitcherScreen(
 ) {
     val scope = rememberCoroutineScope()
     var showSortDialog by remember { mutableStateOf(false) }
+    val reversalFilmVariants = remember { mutableMapOf<String, Int>() }
 
     Column(
         modifier = Modifier
@@ -138,10 +150,17 @@ internal fun SwitcherScreen(
                         }
                     })
                 }
-                .padding(start = 24.dp, end = 12.dp, top = 16.dp),
+                .padding(start = 24.dp, end = 12.dp, top = 22.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SectionLabel("SELECT EXHIBITION")
+            Box(
+                modifier = Modifier
+                    .height(48.dp)
+                    .offset(y = 1.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SectionLabel("- PUNCTUM · STUDIUM -")
+            }
             Spacer(Modifier.weight(1f))
             PressFeedbackIconButton(onClick = onToggleInvitationStyle) {
                 Icon(Icons.Outlined.Style, contentDescription = "切换邀请卡风格", tint = Muted)
@@ -197,6 +216,7 @@ internal fun SwitcherScreen(
             InvitationCardStyle.REVERSAL_FILM -> ReversalFilmGrid(
                 overviews = overviews,
                 gridState = reversalFilmGridState,
+                cardVariants = reversalFilmVariants,
                 onSelect = onSelect,
             )
         }
@@ -278,6 +298,7 @@ private fun TicketList(
 private fun ReversalFilmGrid(
     overviews: List<GalleryOverview>,
     gridState: LazyGridState,
+    cardVariants: MutableMap<String, Int>,
     onSelect: (String) -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -301,10 +322,12 @@ private fun ReversalFilmGrid(
                 items = overviews,
                 key = { _, item -> item.gallery.uri.toString() },
             ) { _, overview ->
+                val galleryKey = overview.gallery.uri.toString()
                 ReversalFilmCard(
                     overview = overview,
                     visualScale = scale,
-                    onClick = { onSelect(overview.gallery.uri.toString()) },
+                    variant = cardVariants.getOrPut(galleryKey) { Random.nextInt(3) },
+                    onClick = { onSelect(galleryKey) },
                 )
             }
             item(key = "navbar", span = { GridItemSpan(maxLineSpan) }) {
@@ -346,6 +369,519 @@ private fun GalleryTitleText(
 
 @Composable
 private fun ReversalFilmCard(
+    overview: GalleryOverview,
+    visualScale: Float,
+    variant: Int,
+    onClick: () -> Unit,
+) {
+    if (KodakInspiredReversalFilmEnabled) {
+        KodakInspiredReversalFilmCard(
+            overview = overview,
+            visualScale = visualScale,
+            variant = variant,
+            onClick = onClick,
+        )
+    } else {
+        LegacyReversalFilmCard(
+            overview = overview,
+            visualScale = visualScale,
+            onClick = onClick,
+        )
+    }
+}
+
+@Composable
+private fun KodakInspiredReversalFilmCard(
+    overview: GalleryOverview,
+    visualScale: Float,
+    variant: Int,
+    onClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    val cachedCover = remember(overview.ticketCoverPath) {
+        overview.ticketCoverPath?.let(::File)?.takeIf(File::exists)
+    }
+    val latestUri = overview.coverUris.firstOrNull()
+    val imageModel = remember(cachedCover, latestUri) {
+        when {
+            cachedCover != null -> ImageRequest.Builder(context)
+                .data(cachedCover)
+                .memoryCacheKey("reversal-film-file:${cachedCover.absolutePath}")
+                .diskCacheKey("reversal-film-file:${cachedCover.absolutePath}")
+                .crossfade(false)
+                .build()
+            latestUri != null -> inviteCoverRequest(context, latestUri)
+            else -> null
+        }
+    }
+    val titleIsChinese = remember(overview.gallery.displayName) {
+        overview.gallery.displayName.any { it.code in 0x4E00..0x9FFF }
+    }
+    val paperColor = when (variant) {
+        0 -> Color(0xFFE9EAE4)
+        1 -> Color(0xFFEAE3D5)
+        else -> Color(0xFFE8EBE5)
+    }
+    val accentColor = when (variant) {
+        0 -> Color(0xFFF04424)
+        1 -> Color(0xFFD91E45)
+        else -> Color(0xFFEF432D)
+    }
+    val cardShape = RoundedCornerShape(4.dp * visualScale)
+    val imageShape = RoundedCornerShape(4.dp * visualScale)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .punctumPressable(
+                pressedScale = 0.985f,
+                pressedOffsetY = 4.dp,
+                pressedAlpha = 0.96f,
+                onClick = onClick,
+            )
+            .shadow(5.dp * visualScale, cardShape, clip = false)
+            .clip(cardShape)
+            .background(paperColor),
+    ) {
+        Image(
+            painter = painterResource(R.drawable.reversal_film_paper_texture),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(alpha = 0.42f),
+        )
+        KodakInspiredDecoration(
+            variant = variant,
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(28.dp * visualScale),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = overview.gallery.displayName,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.SansSerif,
+                        fontSize = (
+                            if (titleIsChinese) 8.2f * visualScale else 9f * visualScale
+                            ).sp,
+                        lineHeight = (9f * visualScale).sp,
+                        letterSpacing = (-0.25f).sp,
+                        fontWeight = FontWeight.Black,
+                        fontSynthesis = FontSynthesis.None,
+                    ),
+                    color = accentColor,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 7.dp * visualScale),
+                )
+                Text(
+                    text = "PUNCTUM SLIDE",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.SansSerif,
+                        fontSize = (3.8f * visualScale).sp,
+                        lineHeight = (4.2f * visualScale).sp,
+                        letterSpacing = (0.25f * visualScale).sp,
+                        fontWeight = FontWeight.Black,
+                    ),
+                    color = accentColor,
+                    maxLines = 1,
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 13.dp * visualScale)
+                    .fillMaxWidth()
+                    .aspectRatio(1.48f)
+                    .clip(imageShape)
+                    .background(Color(0xFFF6F4EE)),
+            ) {
+                if (imageModel != null) {
+                    PunctumImage(
+                        model = imageModel,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(5.dp * visualScale)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Black.copy(alpha = 0.26f), Color.Transparent),
+                            ),
+                        ),
+                )
+                Box(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxHeight()
+                        .width(3.dp * visualScale)
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(Color.Black.copy(alpha = 0.20f), Color.Transparent),
+                            ),
+                        ),
+                )
+            }
+
+            KodakInspiredFooter(
+                variant = variant,
+                visualScale = visualScale,
+                accentColor = accentColor,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun KodakInspiredDecoration(variant: Int, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        when (variant) {
+            0 -> {
+                val yellow = Color(0xFFF5B900).copy(alpha = 0.88f)
+                val panelTop = size.height * 0.70f
+                drawRect(
+                    color = yellow,
+                    topLeft = androidx.compose.ui.geometry.Offset(0f, panelTop),
+                    size = androidx.compose.ui.geometry.Size(size.width, size.height - panelTop),
+                )
+                val barFractions = listOf(0.42f, 0.47f, 0.52f, 0.57f, 0.625f, 0.67f)
+                val barThicknesses = listOf(0.012f, 0.015f, 0.019f, 0.024f, 0.032f, 0.040f)
+                barFractions.forEachIndexed { index, fraction ->
+                    val thickness = size.height * barThicknesses[index]
+                    val y = size.height * fraction
+                    drawRect(
+                        color = yellow,
+                        topLeft = androidx.compose.ui.geometry.Offset(0f, y),
+                        size = androidx.compose.ui.geometry.Size(size.width * 0.155f, thickness),
+                    )
+                    drawRect(
+                        color = yellow,
+                        topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.845f, y),
+                        size = androidx.compose.ui.geometry.Size(size.width * 0.155f, thickness),
+                    )
+                }
+            }
+
+            1 -> {
+                val orange = Color(0xFFF0A000).copy(alpha = 0.92f)
+                val lineThicknesses = listOf(0.009f, 0.012f, 0.016f, 0.022f)
+                repeat(4) { index ->
+                    val leftY = size.height * (0.79f + index * 0.035f)
+                    val rightY = size.height * (0.70f + index * 0.035f)
+                    val path = Path().apply {
+                        moveTo(0f, leftY)
+                        lineTo(size.width * 0.46f, leftY)
+                        cubicTo(
+                            size.width * 0.55f,
+                            leftY,
+                            size.width * 0.56f,
+                            rightY,
+                            size.width * 0.64f,
+                            rightY,
+                        )
+                        lineTo(size.width, rightY)
+                    }
+                    drawPath(
+                        path = path,
+                        color = orange,
+                        style = Stroke(
+                            width = size.height * lineThicknesses[index],
+                            cap = StrokeCap.Round,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KodakInspiredFooter(
+    variant: Int,
+    visualScale: Float,
+    accentColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier) {
+        when (variant) {
+            0 -> {
+                VariantOneProcessingBadge(
+                    visualScale = visualScale,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 3.dp * visualScale, bottom = 4.dp * visualScale),
+                )
+            }
+
+            1 -> {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 5.dp * visualScale, bottom = 4.dp * visualScale),
+                    horizontalAlignment = Alignment.End,
+                ) {
+                    Text(
+                        "PUNCTUM",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = (7.2f * visualScale).sp,
+                            lineHeight = (7.4f * visualScale).sp,
+                            letterSpacing = (-0.42f).sp,
+                            fontWeight = FontWeight(1000),
+                            fontStyle = FontStyle.Italic,
+                        ),
+                        color = Color(0xFF282522),
+                        maxLines = 1,
+                    )
+                    Text(
+                        "PROCESSING SERVICES",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = (3.4f * visualScale).sp,
+                            lineHeight = (3.7f * visualScale).sp,
+                            letterSpacing = (-0.04f * visualScale).sp,
+                            fontWeight = FontWeight.Black,
+                            fontStyle = FontStyle.Italic,
+                        ),
+                        color = Color(0xFF282522),
+                        maxLines = 1,
+                    )
+                }
+            }
+
+            else -> {
+                ThirdVariantPunctumMark(
+                    visualScale = visualScale,
+                    accentColor = accentColor,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 6.dp * visualScale, bottom = 4.dp * visualScale),
+                )
+                Text(
+                    "PROCESSED BY PUNCTUM",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.SansSerif,
+                        fontSize = (4.25f * visualScale).sp,
+                        lineHeight = (4.7f * visualScale).sp,
+                        letterSpacing = (-0.08f * visualScale).sp,
+                        fontWeight = FontWeight(1000),
+                    ),
+                    color = accentColor,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 5.dp * visualScale, bottom = 8.dp * visualScale),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VariantOneProcessingBadge(
+    visualScale: Float,
+    modifier: Modifier = Modifier,
+) {
+    val ink = Color(0xFF27221E)
+    val yellow = Color(0xFFF5B900)
+    Row(
+        modifier = modifier.size(
+            width = 56.dp * visualScale,
+            height = 17.dp * visualScale,
+        )
+            .background(ink, RoundedCornerShape(2.5.dp * visualScale))
+            .padding(start = 2.dp * visualScale, end = 2.8.dp * visualScale),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PunctumApertureMark(
+            lineColor = yellow,
+            dotColor = Color.White,
+            modifier = Modifier.size(13.dp * visualScale),
+        )
+        Spacer(Modifier.width(2.2.dp * visualScale))
+        Canvas(
+            modifier = Modifier.size(
+                width = 4.4.dp * visualScale,
+                height = 10.dp * visualScale,
+            ),
+        ) {
+            repeat(3) { index ->
+                val y = size.height * (0.22f + index * 0.28f)
+                drawLine(
+                    color = yellow,
+                    start = androidx.compose.ui.geometry.Offset(0f, y),
+                    end = androidx.compose.ui.geometry.Offset(size.width, y),
+                    strokeWidth = size.height * (0.09f + index * 0.018f),
+                    cap = StrokeCap.Round,
+                )
+            }
+        }
+        Spacer(Modifier.width(2.dp * visualScale))
+        Column(
+            modifier = Modifier
+                .weight(1f),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                "PROCESSED BY",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = (2.55f * visualScale).sp,
+                    lineHeight = (2.9f * visualScale).sp,
+                    letterSpacing = (-0.05f).sp,
+                    fontWeight = FontWeight.Black,
+                ),
+                color = Color.White,
+                maxLines = 1,
+            )
+            Text(
+                "PUNCTUM",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = (5.05f * visualScale).sp,
+                    lineHeight = (5.25f * visualScale).sp,
+                    letterSpacing = (-0.20f).sp,
+                    fontWeight = FontWeight(1000),
+                ),
+                color = Color.White,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThirdVariantPunctumMark(
+    visualScale: Float,
+    accentColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val yellow = Color(0xFFF3B600)
+    Row(
+        modifier = modifier
+            .size(width = 34.5.dp * visualScale, height = 15.dp * visualScale),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(15.dp * visualScale)
+                .background(yellow, RoundedCornerShape(50)),
+            contentAlignment = Alignment.Center,
+        ) {
+            PunctumApertureMark(
+                lineColor = accentColor,
+                dotColor = accentColor,
+                modifier = Modifier.size(10.5.dp * visualScale),
+            )
+        }
+        Spacer(Modifier.width(2.2.dp * visualScale))
+        Box(
+            modifier = Modifier
+                .width(0.7.dp * visualScale)
+                .height(9.dp * visualScale)
+                .background(accentColor.copy(alpha = 0.88f)),
+        )
+        Spacer(Modifier.width(2.dp * visualScale))
+        Column(verticalArrangement = Arrangement.Center) {
+            Text(
+                "PUNCTUM",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = (2.35f * visualScale).sp,
+                    lineHeight = (2.7f * visualScale).sp,
+                    letterSpacing = (-0.18f).sp,
+                    fontWeight = FontWeight(1000),
+                ),
+                color = accentColor,
+                maxLines = 1,
+            )
+            Text(
+                "ARCHIVE 01",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = (1.55f * visualScale).sp,
+                    lineHeight = (1.9f * visualScale).sp,
+                    letterSpacing = (0.08f * visualScale).sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                color = accentColor.copy(alpha = 0.82f),
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PunctumApertureMark(
+    lineColor: Color,
+    dotColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val stroke = size.minDimension * 0.105f
+        val center = androidx.compose.ui.geometry.Offset(
+            x = size.width * 0.56f,
+            y = size.height * 0.36f,
+        )
+        val radius = size.minDimension * 0.245f
+
+        drawLine(
+            color = lineColor,
+            start = androidx.compose.ui.geometry.Offset(size.width * 0.25f, size.height * 0.16f),
+            end = androidx.compose.ui.geometry.Offset(size.width * 0.25f, size.height * 0.86f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = lineColor,
+            start = androidx.compose.ui.geometry.Offset(size.width * 0.25f, size.height * 0.17f),
+            end = androidx.compose.ui.geometry.Offset(size.width * 0.54f, size.height * 0.17f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round,
+        )
+        drawCircle(
+            color = lineColor,
+            radius = radius,
+            center = center,
+            style = Stroke(width = stroke),
+        )
+        drawCircle(
+            color = dotColor,
+            radius = size.minDimension * 0.065f,
+            center = center,
+        )
+        drawLine(
+            color = lineColor,
+            start = androidx.compose.ui.geometry.Offset(size.width * 0.69f, size.height * 0.70f),
+            end = androidx.compose.ui.geometry.Offset(size.width * 0.88f, size.height * 0.70f),
+            strokeWidth = stroke * 0.68f,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+private fun LegacyReversalFilmCard(
     overview: GalleryOverview,
     visualScale: Float,
     onClick: () -> Unit,
@@ -593,6 +1129,7 @@ private fun PostcardInvitationCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    Spacer(Modifier.height(2.dp))
                     Text(
                         postcardDateLine(overview),
                         style = MaterialTheme.typography.bodyMedium.copy(
@@ -652,6 +1189,7 @@ private fun PostcardInvitationCard(
                         maxLines = 1,
                         overflow = TextOverflow.Clip,
                     )
+                    Spacer(Modifier.height(2.dp))
                     Text(
                         "TAP TO ENTER EXHIBITION",
                         style = MaterialTheme.typography.labelSmall.copy(
@@ -854,8 +1392,8 @@ private fun TicketInfoBand(story: String, time: String, color: Color) {
             story,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontFamily = NotoSerifSc,
-                fontSize = 9.sp,
-                lineHeight = 10.sp,
+                fontSize = 7.sp,
+                lineHeight = 8.sp,
                 letterSpacing = 0.sp,
                 fontWeight = FontWeight.Normal,
                 fontSynthesis = FontSynthesis.None,
@@ -868,8 +1406,8 @@ private fun TicketInfoBand(story: String, time: String, color: Color) {
         Text(
             time,
             style = MaterialTheme.typography.labelSmall.copy(
-                fontSize = 9.sp,
-                lineHeight = 9.sp,
+                fontSize = 7.sp,
+                lineHeight = 7.sp,
                 letterSpacing = 0.sp,
                 fontWeight = FontWeight.Normal,
             ),
@@ -945,42 +1483,239 @@ private fun SortDialog(
     onAdd: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var orderedOverviews by remember { mutableStateOf(overviews) }
+    var draggedGalleryKey by remember { mutableStateOf<String?>(null) }
+    var dragStartIndex by remember { mutableStateOf(-1) }
+    var dragOffsetY by remember { mutableStateOf(0f) }
+    var dragPointerY by remember { mutableStateOf<Float?>(null) }
+    val hapticFeedback = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val rowHeight = 58.dp
+    val listHeight = 290.dp
+    val scrollbarThumbHeight = 36.dp
+    val rowHeightPx = with(density) { rowHeight.toPx() }
+    val listHeightPx = with(density) { listHeight.toPx() }
+    val autoScrollEdgePx = with(density) { 48.dp.toPx() }
+    val maxAutoScrollStepPx = with(density) { 4.dp.toPx() }
+    val sortListState = rememberLazyListState()
+    val showsScrollbar = orderedOverviews.size > 5
+    val scrollRangePx =
+        (orderedOverviews.size * rowHeightPx - listHeightPx).coerceAtLeast(1f)
+    val scrollProgress =
+        (sortListState.firstVisibleItemScrollOffset / scrollRangePx).coerceIn(0f, 1f)
+    val scrollbarOffsetY = with(density) {
+        ((listHeightPx - scrollbarThumbHeight.toPx()) * scrollProgress).toDp()
+    }
+
+    LaunchedEffect(overviews, draggedGalleryKey) {
+        // Overview data refreshes every few seconds. Keep the drag snapshot intact until the
+        // finger lifts, then absorb the latest metadata and persisted gallery order.
+        if (draggedGalleryKey == null) orderedOverviews = overviews
+    }
+
+    fun applyDragReordering(galleryKey: String) {
+        var currentIndex = orderedOverviews.indexOfFirst {
+            it.gallery.uri.toString() == galleryKey
+        }
+        while (
+            dragOffsetY > rowHeightPx / 2f &&
+            currentIndex in 0 until orderedOverviews.lastIndex
+        ) {
+            val reordered = orderedOverviews.toMutableList()
+            reordered.add(
+                currentIndex + 1,
+                reordered.removeAt(currentIndex),
+            )
+            orderedOverviews = reordered
+            dragOffsetY -= rowHeightPx
+            currentIndex += 1
+            hapticFeedback.performHapticFeedback(
+                androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress,
+            )
+        }
+        while (
+            dragOffsetY < -rowHeightPx / 2f &&
+            currentIndex > 0
+        ) {
+            val reordered = orderedOverviews.toMutableList()
+            reordered.add(
+                currentIndex - 1,
+                reordered.removeAt(currentIndex),
+            )
+            orderedOverviews = reordered
+            dragOffsetY += rowHeightPx
+            currentIndex -= 1
+            hapticFeedback.performHapticFeedback(
+                androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress,
+            )
+        }
+    }
+
+    LaunchedEffect(draggedGalleryKey) {
+        val galleryKey = draggedGalleryKey ?: return@LaunchedEffect
+        while (draggedGalleryKey == galleryKey) {
+            withFrameNanos { }
+            val pointerY = dragPointerY ?: continue
+            val autoScrollStep = when {
+                pointerY < autoScrollEdgePx -> {
+                    val strength =
+                        ((autoScrollEdgePx - pointerY) / autoScrollEdgePx).coerceIn(0.25f, 1f)
+                    -maxAutoScrollStepPx * strength
+                }
+                pointerY > listHeightPx - autoScrollEdgePx -> {
+                    val strength =
+                        ((pointerY - (listHeightPx - autoScrollEdgePx)) / autoScrollEdgePx)
+                            .coerceIn(0.25f, 1f)
+                    maxAutoScrollStepPx * strength
+                }
+                else -> 0f
+            }
+            if (autoScrollStep.absoluteValue < 0.5f) continue
+
+            val consumedScroll = sortListState.scrollBy(autoScrollStep)
+            if (consumedScroll.absoluteValue >= 0.5f) {
+                // Counter the list movement so the dragged row stays under the finger, then
+                // swap as newly revealed galleries pass the halfway threshold.
+                dragOffsetY += consumedScroll
+                applyDragReordering(galleryKey)
+            }
+        }
+    }
+
+    fun finishDrag(commit: Boolean) {
+        val draggedKey = draggedGalleryKey
+        val endIndex = orderedOverviews.indexOfFirst {
+            it.gallery.uri.toString() == draggedKey
+        }
+        if (commit && dragStartIndex >= 0 && endIndex >= 0 && dragStartIndex != endIndex) {
+            onMove(dragStartIndex, endIndex)
+        } else if (!commit) {
+            orderedOverviews = overviews
+        }
+        draggedGalleryKey = null
+        dragStartIndex = -1
+        dragOffsetY = 0f
+        dragPointerY = null
+    }
+
     PunctumOverlayDialog(
         title = "调整图集画廊",
         onDismissRequest = onDismiss,
         actions = {},
         content = {
             Column {
-                overviews.forEachIndexed { index, overview ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(listHeight),
+                ) {
+                    LazyColumn(
+                        state = sortListState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clipToBounds(),
                     ) {
-                        Text(
-                            overview.gallery.displayName,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontFamily = galleryTitleFont(overview.gallery.displayName),
-                            ),
-                            color = Bone,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                        item(key = "gallery-sort-rows") {
+                            Column {
+                                orderedOverviews.forEachIndexed { index, overview ->
+                                val galleryKey = overview.gallery.uri.toString()
+                                key(galleryKey) {
+                                    val isDragging = draggedGalleryKey == galleryKey
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(rowHeight)
+                                            .zIndex(if (isDragging) 1f else 0f)
+                                            .graphicsLayer {
+                                                translationY = if (isDragging) dragOffsetY else 0f
+                                                scaleX = if (isDragging) 1.015f else 1f
+                                                scaleY = if (isDragging) 1.015f else 1f
+                                            }
+                                            .background(
+                                                color = if (isDragging) {
+                                                    Bone.copy(alpha = 0.08f)
+                                                } else {
+                                                    Color.Transparent
+                                                },
+                                                shape = RoundedCornerShape(10.dp),
+                                            )
+                                            .pointerInput(galleryKey) {
+                                                detectDragGesturesAfterLongPress(
+                                                    onDragStart = { pointerOffset ->
+                                                        val currentIndex =
+                                                            orderedOverviews.indexOfFirst {
+                                                                it.gallery.uri.toString() == galleryKey
+                                                            }
+                                                        draggedGalleryKey = galleryKey
+                                                        dragStartIndex = currentIndex
+                                                        dragOffsetY = 0f
+                                                        dragPointerY =
+                                                            currentIndex * rowHeightPx -
+                                                                sortListState.firstVisibleItemScrollOffset +
+                                                                pointerOffset.y
+                                                        hapticFeedback.performHapticFeedback(
+                                                            androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress,
+                                                        )
+                                                    },
+                                                    onDragCancel = { finishDrag(commit = false) },
+                                                    onDragEnd = { finishDrag(commit = true) },
+                                                    onDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        dragPointerY = dragPointerY?.plus(dragAmount.y)
+                                                        dragOffsetY += dragAmount.y
+                                                        applyDragReordering(galleryKey)
+                                                    },
+                                                )
+                                            }
+                                            .padding(horizontal = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            overview.gallery.displayName,
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontFamily = galleryTitleFont(overview.gallery.displayName),
+                                            ),
+                                            color = Bone,
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Box(
+                                            modifier = Modifier.size(48.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.DragHandle,
+                                                contentDescription = "长按拖动排序",
+                                                tint = Muted,
+                                                modifier = Modifier.size(22.dp),
+                                            )
+                                        }
+                                        IconButton(onClick = { onDelete(index) }) {
+                                            Icon(
+                                                Icons.Outlined.DeleteOutline,
+                                                contentDescription = "删除画廊",
+                                                tint = Muted,
+                                            )
+                                        }
+                                    }
+                                }
+                                }
+                            }
+                        }
+                    }
+
+                    if (showsScrollbar) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(y = scrollbarOffsetY)
+                                .padding(end = 2.dp)
+                                .width(3.dp)
+                                .height(scrollbarThumbHeight)
+                                .clip(RoundedCornerShape(50))
+                                .background(Muted.copy(alpha = 0.72f)),
                         )
-                        IconButton(
-                            enabled = index > 0,
-                            onClick = { onMove(index, index - 1) },
-                        ) {
-                            Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "上移", tint = Muted)
-                        }
-                        IconButton(
-                            enabled = index < overviews.lastIndex,
-                            onClick = { onMove(index, index + 1) },
-                        ) {
-                            Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "下移", tint = Muted)
-                        }
-                        IconButton(onClick = { onDelete(index) }) {
-                            Icon(Icons.Outlined.DeleteOutline, contentDescription = "删除画廊", tint = Muted)
-                        }
                     }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -1272,6 +2007,7 @@ private val TicketStubFallback = Color(0xFF57534E)
 private val TicketPaper = Color(0xFFFFF5E6)
 private val TicketCardHeight = 116.dp
 private val TicketNotchSize = 10.dp
+private const val KodakInspiredReversalFilmEnabled = false
 private val ReversalFilmPaper = Color(0xFFD0C8BC)
 private val ReversalFilmInk = Color(0xFF292722)
 private val ReversalFilmMuted = Color(0xFF756E62)

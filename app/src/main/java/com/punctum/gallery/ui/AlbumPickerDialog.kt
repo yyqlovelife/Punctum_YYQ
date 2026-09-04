@@ -1,17 +1,24 @@
 package com.punctum.gallery.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +32,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.punctum.gallery.model.SystemAlbum
@@ -48,6 +57,7 @@ internal fun AlbumPickerDialog(
         if (albums == null) onRequestAlbums()
     }
     val loaded = albums ?: return
+    val listState = rememberLazyListState()
 
     val selectableKeys = remember(loaded, existingAlbumKeys) {
         loaded
@@ -68,7 +78,10 @@ internal fun AlbumPickerDialog(
             TextButton(
                 enabled = confirmEnabled,
                 onClick = {
-                    val chosen = loaded.filter { it.uri.toString() in selectedKeys }
+                    val chosen = loaded.filter {
+                        val key = it.uri.toString()
+                        key in selectedKeys && key in selectableKeys
+                    }
                     onConfirm(chosen)
                 },
             ) {
@@ -85,11 +98,7 @@ internal fun AlbumPickerDialog(
                     )
                 }
                 else -> {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 420.dp),
-                    ) {
+                    ScrollableAlbumList(state = listState) {
                         items(loaded, key = { it.uri.toString() }) { album ->
                             val key = album.uri.toString()
                             val alreadyAdded = key in existingAlbumKeys
@@ -154,7 +163,7 @@ private fun AlbumPickerRow(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                if (alreadyAdded) "已添加 · ${album.itemCount} 项" else "${album.itemCount} 项",
+                if (alreadyAdded) "已添加" else "${album.itemCount} 项",
                 style = MaterialTheme.typography.labelSmall,
                 color = Muted,
             )
@@ -174,6 +183,7 @@ internal fun MoveAlbumPickerDialog(
         if (albums == null) onRequestAlbums()
     }
     val loaded = albums ?: return
+    val listState = rememberLazyListState()
 
     PunctumOverlayDialog(
         title = "移动到图集",
@@ -193,11 +203,7 @@ internal fun MoveAlbumPickerDialog(
                     )
                 }
                 else -> {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 420.dp),
-                    ) {
+                    ScrollableAlbumList(state = listState) {
                         items(loaded, key = { it.uri.toString() }) { album ->
                             val key = album.uri.toString()
                             val isCurrent = key == currentAlbumKey
@@ -213,6 +219,56 @@ internal fun MoveAlbumPickerDialog(
             }
         },
     )
+}
+
+@Composable
+private fun ScrollableAlbumList(
+    state: LazyListState,
+    content: LazyListScope.() -> Unit,
+) {
+    val density = LocalDensity.current
+    val thumbHeight = 36.dp
+    val layoutInfo = state.layoutInfo
+    val visibleItems = layoutInfo.visibleItemsInfo
+    val showsScrollbar = state.canScrollBackward || state.canScrollForward
+    val averageItemHeightPx = if (visibleItems.isEmpty()) {
+        1f
+    } else {
+        visibleItems.sumOf { it.size }.toFloat() / visibleItems.size
+    }
+    val viewportHeightPx = layoutInfo.viewportSize.height.toFloat()
+    val scrollRangePx =
+        (averageItemHeightPx * layoutInfo.totalItemsCount - viewportHeightPx).coerceAtLeast(1f)
+    val estimatedScrollOffsetPx =
+        state.firstVisibleItemIndex * averageItemHeightPx + state.firstVisibleItemScrollOffset
+    val scrollProgress = (estimatedScrollOffsetPx / scrollRangePx).coerceIn(0f, 1f)
+    val thumbOffsetY = with(density) {
+        ((viewportHeightPx - thumbHeight.toPx()).coerceAtLeast(0f) * scrollProgress).toDp()
+    }
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        LazyColumn(
+            state = state,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp),
+            content = content,
+        )
+        if (showsScrollbar) {
+            Box(modifier = Modifier.matchParentSize()) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(y = thumbOffsetY)
+                        .padding(end = 2.dp)
+                        .width(3.dp)
+                        .height(thumbHeight)
+                        .clip(RoundedCornerShape(50))
+                        .background(Muted.copy(alpha = 0.72f)),
+                )
+            }
+        }
+    }
 }
 
 @Composable
