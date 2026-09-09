@@ -1,7 +1,17 @@
 package com.punctum.gallery.ui
 
+import android.animation.ValueAnimator
 import android.net.Uri
 import android.graphics.Typeface
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
@@ -51,6 +61,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -108,6 +120,26 @@ import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
 import kotlin.random.Random
 
+private enum class HomeStyleTransitionMode {
+    LEGACY,
+    SUBTLE,
+    EMPHASIZED,
+}
+
+// One-switch rollback: LEGACY restores the original instant style swap below.
+private val HomeStyleTransition = HomeStyleTransitionMode.EMPHASIZED
+private const val HOME_STYLE_EXIT_DURATION_MILLIS = 100
+private const val HOME_STYLE_ENTER_DELAY_MILLIS = 30
+private const val HOME_STYLE_ENTER_DURATION_MILLIS = 160
+private const val HOME_STYLE_ENTER_SCALE = 0.985f
+private const val EMPHASIZED_HOME_STYLE_EXIT_DURATION_MILLIS = 120
+private const val EMPHASIZED_HOME_STYLE_ENTER_DELAY_MILLIS = 0
+private const val EMPHASIZED_HOME_STYLE_ENTER_DURATION_MILLIS = 220
+private const val EMPHASIZED_HOME_STYLE_ENTER_SCALE = 0.96f
+private val EmphasizedHomeStyleEnterOffset = 12.dp
+private val EmphasizedHomeStyleExitOffset = 8.dp
+private val HomeStyleEaseOut = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
+
 @Composable
 internal fun SwitcherScreen(
     overviews: List<GalleryOverview>,
@@ -129,6 +161,9 @@ internal fun SwitcherScreen(
     val scope = rememberCoroutineScope()
     var showSortDialog by remember { mutableStateOf(false) }
     val reversalFilmVariants = remember { mutableMapOf<String, Int>() }
+    val density = LocalDensity.current
+    val emphasizedEnterOffsetPx = with(density) { EmphasizedHomeStyleEnterOffset.roundToPx() }
+    val emphasizedExitOffsetPx = with(density) { EmphasizedHomeStyleExitOffset.roundToPx() }
 
     Column(
         modifier = Modifier
@@ -162,7 +197,10 @@ internal fun SwitcherScreen(
                 SectionLabel("- PUNCTUM · STUDIUM -")
             }
             Spacer(Modifier.weight(1f))
-            PressFeedbackIconButton(onClick = onToggleInvitationStyle) {
+            PressFeedbackIconButton(
+                onClick = onToggleInvitationStyle,
+                activateImmediatelyOnRelease = true,
+            ) {
                 Icon(Icons.Outlined.Style, contentDescription = "切换邀请卡风格", tint = Muted)
             }
             PressFeedbackIconButton(onClick = { showSortDialog = true }) {
@@ -200,25 +238,155 @@ internal fun SwitcherScreen(
         )
         Spacer(Modifier.height(26.dp))
 
-        when (invitationStyle) {
-            InvitationCardStyle.POSTCARD -> PostcardList(
-                overviews = overviews,
-                listState = postcardListState,
-                onSelect = onSelect,
-            )
+        when {
+            HomeStyleTransition == HomeStyleTransitionMode.EMPHASIZED &&
+                ValueAnimator.areAnimatorsEnabled() -> {
+                AnimatedContent(
+                    targetState = invitationStyle,
+                    modifier = Modifier.fillMaxSize(),
+                    transitionSpec = {
+                        (
+                            fadeIn(
+                                animationSpec = tween(
+                                    durationMillis = EMPHASIZED_HOME_STYLE_ENTER_DURATION_MILLIS,
+                                    delayMillis = EMPHASIZED_HOME_STYLE_ENTER_DELAY_MILLIS,
+                                    easing = HomeStyleEaseOut,
+                                ),
+                            ) + scaleIn(
+                                initialScale = EMPHASIZED_HOME_STYLE_ENTER_SCALE,
+                                animationSpec = tween(
+                                    durationMillis = EMPHASIZED_HOME_STYLE_ENTER_DURATION_MILLIS,
+                                    delayMillis = EMPHASIZED_HOME_STYLE_ENTER_DELAY_MILLIS,
+                                    easing = HomeStyleEaseOut,
+                                ),
+                            ) + slideInVertically(
+                                initialOffsetY = { emphasizedEnterOffsetPx },
+                                animationSpec = tween(
+                                    durationMillis = EMPHASIZED_HOME_STYLE_ENTER_DURATION_MILLIS,
+                                    delayMillis = EMPHASIZED_HOME_STYLE_ENTER_DELAY_MILLIS,
+                                    easing = HomeStyleEaseOut,
+                                ),
+                            )
+                            ).togetherWith(
+                            fadeOut(
+                                animationSpec = tween(
+                                    durationMillis = EMPHASIZED_HOME_STYLE_EXIT_DURATION_MILLIS,
+                                    easing = HomeStyleEaseOut,
+                                ),
+                            ) + slideOutVertically(
+                                targetOffsetY = { -emphasizedExitOffsetPx },
+                                animationSpec = tween(
+                                    durationMillis = EMPHASIZED_HOME_STYLE_EXIT_DURATION_MILLIS,
+                                    easing = HomeStyleEaseOut,
+                                ),
+                            ),
+                        )
+                    },
+                    contentKey = { it },
+                    label = "home-invitation-style-emphasized",
+                ) { style ->
+                    when (style) {
+                        InvitationCardStyle.POSTCARD -> PostcardList(
+                            overviews = overviews,
+                            listState = postcardListState,
+                            onSelect = onSelect,
+                        )
 
-            InvitationCardStyle.TICKET -> TicketList(
-                overviews = overviews,
-                listState = ticketListState,
-                onSelect = onSelect,
-            )
+                        InvitationCardStyle.TICKET -> TicketList(
+                            overviews = overviews,
+                            listState = ticketListState,
+                            onSelect = onSelect,
+                        )
 
-            InvitationCardStyle.REVERSAL_FILM -> ReversalFilmGrid(
-                overviews = overviews,
-                gridState = reversalFilmGridState,
-                cardVariants = reversalFilmVariants,
-                onSelect = onSelect,
-            )
+                        InvitationCardStyle.REVERSAL_FILM -> ReversalFilmGrid(
+                            overviews = overviews,
+                            gridState = reversalFilmGridState,
+                            cardVariants = reversalFilmVariants,
+                            onSelect = onSelect,
+                        )
+                    }
+                }
+            }
+
+            HomeStyleTransition == HomeStyleTransitionMode.SUBTLE &&
+                ValueAnimator.areAnimatorsEnabled() -> {
+                AnimatedContent(
+                    targetState = invitationStyle,
+                    modifier = Modifier.fillMaxSize(),
+                    transitionSpec = {
+                        (
+                            fadeIn(
+                                animationSpec = tween(
+                                    durationMillis = HOME_STYLE_ENTER_DURATION_MILLIS,
+                                    delayMillis = HOME_STYLE_ENTER_DELAY_MILLIS,
+                                    easing = HomeStyleEaseOut,
+                                ),
+                            ) + scaleIn(
+                                initialScale = HOME_STYLE_ENTER_SCALE,
+                                animationSpec = tween(
+                                    durationMillis = HOME_STYLE_ENTER_DURATION_MILLIS,
+                                    delayMillis = HOME_STYLE_ENTER_DELAY_MILLIS,
+                                    easing = HomeStyleEaseOut,
+                                ),
+                            )
+                            ).togetherWith(
+                            fadeOut(
+                                animationSpec = tween(
+                                    durationMillis = HOME_STYLE_EXIT_DURATION_MILLIS,
+                                    easing = HomeStyleEaseOut,
+                                ),
+                            ),
+                        )
+                    },
+                    contentKey = { it },
+                    label = "home-invitation-style",
+                ) { style ->
+                    when (style) {
+                        InvitationCardStyle.POSTCARD -> PostcardList(
+                            overviews = overviews,
+                            listState = postcardListState,
+                            onSelect = onSelect,
+                        )
+
+                        InvitationCardStyle.TICKET -> TicketList(
+                            overviews = overviews,
+                            listState = ticketListState,
+                            onSelect = onSelect,
+                        )
+
+                        InvitationCardStyle.REVERSAL_FILM -> ReversalFilmGrid(
+                            overviews = overviews,
+                            gridState = reversalFilmGridState,
+                            cardVariants = reversalFilmVariants,
+                            onSelect = onSelect,
+                        )
+                    }
+                }
+            }
+
+            else -> {
+                // Legacy behavior intentionally retained for immediate rollback.
+                when (invitationStyle) {
+                    InvitationCardStyle.POSTCARD -> PostcardList(
+                        overviews = overviews,
+                        listState = postcardListState,
+                        onSelect = onSelect,
+                    )
+
+                    InvitationCardStyle.TICKET -> TicketList(
+                        overviews = overviews,
+                        listState = ticketListState,
+                        onSelect = onSelect,
+                    )
+
+                    InvitationCardStyle.REVERSAL_FILM -> ReversalFilmGrid(
+                        overviews = overviews,
+                        gridState = reversalFilmGridState,
+                        cardVariants = reversalFilmVariants,
+                        onSelect = onSelect,
+                    )
+                }
+            }
         }
     }
 
@@ -438,6 +606,7 @@ private fun KodakInspiredReversalFilmCard(
                 pressedScale = 0.985f,
                 pressedOffsetY = 4.dp,
                 pressedAlpha = 0.96f,
+                activateImmediatelyOnRelease = true,
                 onClick = onClick,
             )
             .shadow(5.dp * visualScale, cardShape, clip = false)
@@ -916,6 +1085,7 @@ private fun LegacyReversalFilmCard(
                 pressedScale = 0.985f,
                 pressedOffsetY = 4.dp,
                 pressedAlpha = 0.96f,
+                activateImmediatelyOnRelease = true,
                 onClick = onClick,
             )
             .shadow(5.dp * visualScale, cardShape, clip = false)
@@ -1098,6 +1268,7 @@ private fun PostcardInvitationCard(
                 pressedScale = 0.985f,
                 pressedOffsetY = 4.dp,
                 pressedAlpha = 0.96f,
+                activateImmediatelyOnRelease = true,
                 onClick = onClick,
             )
             .background(paper)
@@ -1264,6 +1435,7 @@ private fun TicketInvitationCard(
                 pressedScale = 0.985f,
                 pressedOffsetY = 4.dp,
                 pressedAlpha = 0.96f,
+                activateImmediatelyOnRelease = true,
                 onClick = onClick,
             )
             .background(TicketPaper),
@@ -1621,13 +1793,22 @@ private fun SortDialog(
                                 val galleryKey = overview.gallery.uri.toString()
                                 key(galleryKey) {
                                     val isDragging = draggedGalleryKey == galleryKey
+                                    val placementOffset = remember { Animatable(0f) }
+                                    var previousIndex by remember { mutableStateOf(index) }
+                                    LaunchedEffect(index, draggedGalleryKey) {
+                                        if (previousIndex != index && !isDragging) {
+                                            placementOffset.snapTo((previousIndex - index) * rowHeightPx)
+                                            placementOffset.animateTo(0f, spring(dampingRatio = 0.82f, stiffness = 700f))
+                                        }
+                                        previousIndex = index
+                                    }
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(rowHeight)
                                             .zIndex(if (isDragging) 1f else 0f)
                                             .graphicsLayer {
-                                                translationY = if (isDragging) dragOffsetY else 0f
+                                                translationY = if (isDragging) dragOffsetY else placementOffset.value
                                                 scaleX = if (isDragging) 1.015f else 1f
                                                 scaleY = if (isDragging) 1.015f else 1f
                                             }

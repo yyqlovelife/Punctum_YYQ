@@ -97,7 +97,7 @@ internal fun GalleryScreen(
     var readyFirstRowUris by remember(gallery.uri, firstRowKey) { mutableStateOf(emptySet<String>()) }
 
     LaunchedEffect(gallery.uri, loading, photos.isEmpty()) {
-        if (loading || photos.isEmpty()) onContentReady()
+        if (!loading && photos.isEmpty()) onContentReady()
     }
 
     LaunchedEffect(photos, listState) {
@@ -366,7 +366,10 @@ private fun GalleryHeader(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(
                 modifier = Modifier
-                    .punctumPressable(onClick = onOpenSwitcher)
+                    .punctumPressable(
+                        activateImmediatelyOnRelease = true,
+                        onClick = onOpenSwitcher,
+                    )
                     .padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

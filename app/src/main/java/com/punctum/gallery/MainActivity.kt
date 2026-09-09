@@ -1,5 +1,6 @@
 package com.punctum.gallery
 
+import android.animation.ValueAnimator
 import android.os.Bundle
 import android.Manifest
 import android.os.Build
@@ -20,6 +21,8 @@ import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -44,14 +47,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.snapshotFlow
 import com.punctum.gallery.ui.AlbumPickerDialog
 import androidx.core.view.WindowCompat
@@ -73,6 +79,18 @@ import com.punctum.gallery.ui.theme.Ink
 import com.punctum.gallery.ui.theme.Muted
 import com.punctum.gallery.ui.theme.PunctumTheme
 import com.punctum.gallery.ui.theme.Surface1
+
+private enum class HomeGalleryTransitionMode {
+    LEGACY,
+    LAYERED,
+}
+
+// One-switch rollback: LEGACY restores the original instant page reveal below.
+private val HomeGalleryTransition = HomeGalleryTransitionMode.LAYERED
+private const val HOME_GALLERY_ENTER_DURATION_MILLIS = 180
+private const val HOME_GALLERY_EXIT_DURATION_MILLIS = 160
+private val HomeGalleryEnterOffset = 8.dp
+private val HomeGalleryEaseOut = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -208,9 +226,19 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun PunctumApp(vm: GalleryViewModel) {
+    val current = vm.currentGallery
+    val currentKey = current?.uri?.toString()
     var renameTarget by remember { mutableStateOf<Gallery?>(null) }
     var showAlbumPicker by remember { mutableStateOf(false) }
-    var readyGalleryKey by remember { mutableStateOf<String?>(null) }
+    var readyGalleryKey by remember(currentKey) { mutableStateOf<String?>(null) }
+    var galleryExitInProgress by remember(currentKey) { mutableStateOf(false) }
+    val transitionScope = rememberCoroutineScope()
+    val galleryTransitionProgress = remember(currentKey) { Animatable(0f) }
+    val density = LocalDensity.current
+    val galleryEnterOffsetPx = with(density) { HomeGalleryEnterOffset.toPx() }
+    val layeredHomeGalleryMotion =
+        HomeGalleryTransition == HomeGalleryTransitionMode.LAYERED &&
+            ValueAnimator.areAnimatorsEnabled()
     val postcardListState = rememberLazyListState()
     val ticketListState = rememberLazyListState()
     val reversalFilmGridState = rememberLazyGridState()
@@ -238,46 +266,95 @@ private fun PunctumApp(vm: GalleryViewModel) {
         vm.clearPendingHomeScroll()
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Ink)) {
-        val current = vm.currentGallery
-        val currentKey = current?.uri?.toString()
-        LaunchedEffect(currentKey) {
-            if (currentKey == null) readyGalleryKey = null
-        }
-
-        if (vm.galleries.isEmpty()) {
-            EmptyScreen(onPickFolder = { showAlbumPicker = true })
-        } else {
-            val ordered = vm.galleries.map { gallery ->
-                vm.overviews[gallery.uri.toString()] ?: GalleryOverview(gallery, loading = true)
-            }
-            SwitcherScreen(
-                overviews = ordered,
-                canClose = false,
-                title = "Your Punctums",
-                subtitle = vm.homeSubtitle,
-                invitationStyle = vm.invitationStyle,
-                postcardListState = postcardListState,
-                ticketListState = ticketListState,
-                reversalFilmGridState = reversalFilmGridState,
-                onSelect = vm::selectGallery,
-                onAdd = { showAlbumPicker = true },
-                onToggleInvitationStyle = vm::toggleInvitationStyle,
-                onRename = { renameTarget = it },
-                onMove = vm::moveGallery,
-                onDelete = vm::removeGallery,
-                onClose = vm::closeSwitcher,
+    LaunchedEffect(currentKey, readyGalleryKey, layeredHomeGalleryMotion) {
+        if (currentKey == null || readyGalleryKey != currentKey) return@LaunchedEffect
+        if (layeredHomeGalleryMotion) {
+            galleryTransitionProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = HOME_GALLERY_ENTER_DURATION_MILLIS,
+                    easing = HomeGalleryEaseOut,
+                ),
             )
+        } else {
+            galleryTransitionProgress.snapTo(1f)
+        }
+    }
+
+    fun requestHome() {
+        if (currentKey == null || galleryExitInProgress) return
+        if (!layeredHomeGalleryMotion) {
+            vm.goHome()
+            return
+        }
+        galleryExitInProgress = true
+        transitionScope.launch {
+            galleryTransitionProgress.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(
+                    durationMillis = HOME_GALLERY_EXIT_DURATION_MILLIS,
+                    easing = HomeGalleryEaseOut,
+                ),
+            )
+            if (vm.currentUri == currentKey) vm.goHome()
+            galleryExitInProgress = false
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Ink)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    // Keep the home surface mounted underneath the gallery during
+                    // the transition so a cancelled/interrupted animation cannot
+                    // expose the Ink window background.
+                    alpha = 1f
+                },
+        ) {
+            if (vm.galleries.isEmpty()) {
+                EmptyScreen(onPickFolder = { showAlbumPicker = true })
+            } else {
+                val ordered = vm.galleries.map { gallery ->
+                    vm.overviews[gallery.uri.toString()] ?: GalleryOverview(gallery, loading = true)
+                }
+                SwitcherScreen(
+                    overviews = ordered,
+                    canClose = false,
+                    title = "Your Punctums",
+                    subtitle = vm.homeSubtitle,
+                    invitationStyle = vm.invitationStyle,
+                    postcardListState = postcardListState,
+                    ticketListState = ticketListState,
+                    reversalFilmGridState = reversalFilmGridState,
+                    onSelect = vm::selectGallery,
+                    onAdd = { showAlbumPicker = true },
+                    onToggleInvitationStyle = vm::toggleInvitationStyle,
+                    onRename = { renameTarget = it },
+                    onMove = vm::moveGallery,
+                    onDelete = vm::removeGallery,
+                    onClose = vm::closeSwitcher,
+                )
+            }
         }
 
         if (current != null && currentKey != null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Ink)
                     .graphicsLayer {
-                        alpha = if (readyGalleryKey == currentKey) 1f else 0f
-                    },
+                        alpha = when {
+                            readyGalleryKey != currentKey -> 0f
+                            layeredHomeGalleryMotion -> galleryTransitionProgress.value
+                            else -> 1f
+                        }
+                        translationY = if (layeredHomeGalleryMotion) {
+                            (1f - galleryTransitionProgress.value) * galleryEnterOffsetPx
+                        } else {
+                            0f
+                        }
+                    }
+                    .background(Ink),
             ) {
                 key(currentKey) {
                     val listState = rememberLazyListState()
@@ -287,7 +364,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
                         overview = vm.overviews[currentKey],
                         loading = vm.loadingPhotos,
                         listState = listState,
-                        onOpenSwitcher = vm::openSwitcher,
+                        onOpenSwitcher = ::requestHome,
                         onRename = { renameTarget = it },
                         onSelectPhoto = vm::openDetail,
                         onDeletePhoto = vm::deletePhoto,
@@ -328,8 +405,12 @@ private fun PunctumApp(vm: GalleryViewModel) {
         }
 
         val detailIndex = vm.selectedIndex
-        if (detailIndex != null && vm.photos.isNotEmpty()) {
-            DetailScreen(
+        AnimatedVisibility(
+            visible = detailIndex != null && vm.photos.isNotEmpty(),
+            enter = fadeIn(tween(180)) ,
+            exit = fadeOut(tween(140)),
+        ) {
+            if (detailIndex != null && vm.photos.isNotEmpty()) DetailScreen(
                 photos = vm.photos,
                 startIndex = detailIndex,
                 currentAlbumKey = currentKey,
@@ -380,7 +461,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
         when {
             vm.selectedIndex != null -> vm.closeDetail()
             vm.showSwitcher -> vm.closeSwitcher()
-            vm.currentGallery != null -> vm.goHome()
+            vm.currentGallery != null -> requestHome()
         }
     }
 
