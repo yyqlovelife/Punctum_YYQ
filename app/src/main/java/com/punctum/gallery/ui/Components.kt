@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,9 +71,11 @@ internal fun Modifier.punctumPressable(
     pressedScale: Float = 0.88f,
     pressedOffsetY: Dp = 2.dp,
     pressedAlpha: Float = 0.78f,
+    activateImmediatelyOnRelease: Boolean = false,
     onClick: () -> Unit,
 ): Modifier {
     val progress = remember { Animatable(0f) }
+    val animationScope = rememberCoroutineScope()
     val currentOnClick by rememberUpdatedState(onClick)
 
     LaunchedEffect(enabled) {
@@ -88,10 +91,35 @@ internal fun Modifier.punctumPressable(
             translationY = pressedOffsetY.toPx() * amount
             alpha = 1f + (pressedAlpha - 1f) * amount
         }
-        .pointerInput(enabled) {
+        .pointerInput(enabled, activateImmediatelyOnRelease) {
             if (!enabled) return@pointerInput
             detectTapGestures(
                 onPress = {
+                    if (activateImmediatelyOnRelease) {
+                        val pressJob = animationScope.launch {
+                            progress.animateTo(
+                                targetValue = 1f,
+                                animationSpec = tween(
+                                    durationMillis = 110,
+                                    easing = LinearOutSlowInEasing,
+                                ),
+                            )
+                        }
+                        val released = tryAwaitRelease()
+                        pressJob.cancel()
+                        animationScope.launch {
+                            progress.animateTo(
+                                targetValue = 0f,
+                                animationSpec = spring(
+                                    dampingRatio = if (released) 0.72f else 0.76f,
+                                    stiffness = 900f,
+                                ),
+                            )
+                        }
+                        if (released) currentOnClick()
+                        return@detectTapGestures
+                    }
+
                     coroutineScope {
                         val pressJob = launch {
                             progress.animateTo(
@@ -145,12 +173,17 @@ internal fun PressFeedbackIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    activateImmediatelyOnRelease: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     Box(
         modifier = modifier
             .size(48.dp)
-            .punctumPressable(enabled = enabled, onClick = onClick),
+            .punctumPressable(
+                enabled = enabled,
+                activateImmediatelyOnRelease = activateImmediatelyOnRelease,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
         content = content,
     )
