@@ -157,6 +157,9 @@ struct LiveHoldCatcher: UIViewRepresentable {
     var onTapLeft: () -> Void
     var onTapRight: () -> Void
     var onTapCenter: () -> Void
+    var pinchEnabled = false
+    var onPinchChange: (CGFloat, CGPoint, CGSize) -> Void = { _, _, _ in }
+    var onPinchEnd: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -183,8 +186,16 @@ struct LiveHoldCatcher: UIViewRepresentable {
         coordinator.onTapLeft = onTapLeft
         coordinator.onTapRight = onTapRight
         coordinator.onTapCenter = onTapCenter
-        coordinator.pressRecognizer?.isEnabled = holdEnabled
-        coordinator.tapRecognizer?.isEnabled = pagingEnabled
+        coordinator.pinchEnabled = pinchEnabled
+        coordinator.onPinchChange = onPinchChange
+        coordinator.onPinchEnd = onPinchEnd
+        coordinator.pinchRecognizer?.isEnabled = pinchEnabled
+        coordinator.pressRecognizer?.isEnabled = holdEnabled && !coordinator.isPinching
+        coordinator.tapRecognizer?.isEnabled = pagingEnabled && !coordinator.isPinching
+    }
+
+    static func dismantleUIView(_ uiView: LiveCatcherView, coordinator: Coordinator) {
+        coordinator.finishPinch(notify: false)
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
@@ -201,22 +212,98 @@ struct LiveHoldCatcher: UIViewRepresentable {
         var onTapCenter: () -> Void = {}
         var pressRecognizer: UILongPressGestureRecognizer?
         var tapRecognizer: UITapGestureRecognizer?
+        var pinchEnabled = false
+        var onPinchChange: (CGFloat, CGPoint, CGSize) -> Void = { _, _, _ in }
+        var onPinchEnd: () -> Void = {}
+        var pinchRecognizer: UIPinchGestureRecognizer?
+        private(set) var isPinching = false
+        private var pinchAnchor = CGPoint(x: 0.5, y: 0.5)
+        private var pinchStartPoint = CGPoint.zero
+        private var suspendedPans: [UIPanGestureRecognizer] = []
         private var didStart = false
+
+        override init() {
+            super.init()
+            NotificationCenter.default.addObserver(self, selector: #selector(suspendGestures),
+                name: UIApplication.willResignActiveNotification, object: nil)
+        }
+        deinit { NotificationCenter.default.removeObserver(self) }
+
+        @objc private func suspendGestures() {
+            finishPinch()
+            if didStart { onHoldEnd(); didStart = false }
+            for recognizer in [pressRecognizer, tapRecognizer, pinchRecognizer] {
+                guard let recognizer else { continue }
+                let enabled = recognizer.isEnabled
+                recognizer.isEnabled = false
+                recognizer.isEnabled = enabled
+            }
+        }
 
         func attach(to view: LiveCatcherView) {
             let press = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
             press.minimumPressDuration = 0.15
             press.allowableMovement = 28
+            press.numberOfTouchesRequired = 1
             press.cancelsTouchesInView = false
             press.delegate = self
             let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
             tap.cancelsTouchesInView = true
             tap.delegate = self
             tap.require(toFail: press)
+            let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+            pinch.delegate = self
+            pinch.cancelsTouchesInView = true
+            view.isMultipleTouchEnabled = true
+            view.addGestureRecognizer(pinch)
+            tap.require(toFail: pinch)
+            pinchRecognizer = pinch
             view.addGestureRecognizer(press)
             view.addGestureRecognizer(tap)
             pressRecognizer = press
             tapRecognizer = tap
+        }
+
+        @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                isPinching = true
+                let point = recognizer.location(in: recognizer.view)
+                pinchStartPoint = point
+                pinchAnchor = CGPoint(x: min(max((point.x - imageRect.minX) / imageRect.width, 0), 1),
+                                      y: min(max((point.y - imageRect.minY) / imageRect.height, 0), 1))
+                if didStart { onHoldEnd(); didStart = false }
+                pressRecognizer?.isEnabled = false
+                tapRecognizer?.isEnabled = false
+                onPinchChange(recognizer.scale, pinchAnchor, .zero)
+                // Cancel ancestor scrolling once the two-finger image gesture wins.
+                var ancestor = recognizer.view?.superview
+                while let view = ancestor {
+                    for case let pan as UIPanGestureRecognizer in view.gestureRecognizers ?? [] where pan.isEnabled {
+                        suspendedPans.append(pan)
+                        pan.isEnabled = false
+                    }
+                    ancestor = view.superview
+                }
+            case .changed:
+                let point = recognizer.location(in: recognizer.view)
+                let translation = CGSize(width: point.x - pinchStartPoint.x,
+                                         height: point.y - pinchStartPoint.y)
+                onPinchChange(recognizer.scale, pinchAnchor, translation)
+            case .ended, .cancelled, .failed:
+                finishPinch()
+            default: break
+            }
+        }
+
+        func finishPinch(notify: Bool = true) {
+            guard isPinching else { return }
+            isPinching = false
+            suspendedPans.forEach { $0.isEnabled = true }
+            suspendedPans.removeAll()
+            pressRecognizer?.isEnabled = holdEnabled
+            tapRecognizer?.isEnabled = pagingEnabled
+            if notify { onPinchEnd() }
         }
 
         @objc func handlePress(_ recognizer: UILongPressGestureRecognizer) {
@@ -234,7 +321,7 @@ struct LiveHoldCatcher: UIViewRepresentable {
         }
 
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
-            guard pagingEnabled, let view = recognizer.view else { return }
+            guard pagingEnabled, !isPinching, let view = recognizer.view else { return }
             let point = recognizer.location(in: view)
             if badgeHotRect.contains(point) {
                 onBadgeTap()
@@ -253,6 +340,11 @@ struct LiveHoldCatcher: UIViewRepresentable {
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             let point = gestureRecognizer.location(in: gestureRecognizer.view)
+            if gestureRecognizer === pinchRecognizer {
+                guard pinchEnabled, imageRect.width > 0, imageRect.height > 0,
+                      gestureRecognizer.numberOfTouches == 2 else { return false }
+                return (0..<2).allSatisfy { imageRect.contains(gestureRecognizer.location(ofTouch: $0, in: gestureRecognizer.view)) }
+            }
             if gestureRecognizer === pressRecognizer {
                 return holdEnabled && imageRect.contains(point) && !badgeHotRect.contains(point)
             }
@@ -263,7 +355,8 @@ struct LiveHoldCatcher: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldReceive touch: UITouch
         ) -> Bool {
-            if gestureRecognizer === pressRecognizer { return holdEnabled }
+            if gestureRecognizer === pinchRecognizer { return pinchEnabled }
+            if gestureRecognizer === pressRecognizer { return holdEnabled && !isPinching }
             return pagingEnabled
         }
 
@@ -271,7 +364,11 @@ struct LiveHoldCatcher: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            otherGestureRecognizer is UIPanGestureRecognizer && gestureRecognizer === pressRecognizer
+            if (gestureRecognizer === pinchRecognizer && otherGestureRecognizer === pressRecognizer)
+                || (gestureRecognizer === pressRecognizer && otherGestureRecognizer === pinchRecognizer) {
+                return true // A second finger can take over an already-started Live Photo hold.
+            }
+            return !isPinching && otherGestureRecognizer is UIPanGestureRecognizer && gestureRecognizer === pressRecognizer
         }
     }
 }

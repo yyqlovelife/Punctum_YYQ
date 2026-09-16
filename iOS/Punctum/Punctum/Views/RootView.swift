@@ -6,6 +6,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var renameTarget: PunctumGallery?
     @State private var renameText = ""
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var showingHome: Bool { model.showSwitcher || model.currentGallery == nil || model.galleryReadyID != model.currentGalleryID }
 
     var body: some View {
         ZStack {
@@ -13,7 +15,8 @@ struct RootView: View {
 
             if model.galleries.isEmpty {
                 EmptyScreen(onAdd: model.requestAlbumPicker)
-            } else if let gallery = model.currentGallery, !model.showSwitcher {
+            }
+            if let gallery = model.currentGallery {
                 GalleryScreen(
                     gallery: gallery,
                     photos: model.photos,
@@ -25,7 +28,12 @@ struct RootView: View {
                     onDeletePhoto: model.deletePhoto,
                     onLoadMore: model.loadMorePhotos
                 )
-            } else {
+                .opacity(showingHome ? 0 : 1)
+                .offset(y: reduceMotion || !showingHome ? 0 : 8)
+                .allowsHitTesting(!showingHome && model.detailIndex == nil)
+                .accessibilityHidden(showingHome)
+            }
+            if !model.galleries.isEmpty {
                 SwitcherScreen(
                     galleries: model.galleries,
                     overviews: model.overviews,
@@ -38,7 +46,14 @@ struct RootView: View {
                     onMove: model.moveGallery,
                     onDelete: model.removeGallery
                 )
-                .transition(.opacity)
+                .opacity(showingHome ? 1 : 0)
+                .allowsHitTesting(showingHome && model.detailIndex == nil)
+                .accessibilityHidden(!showingHome)
+            }
+
+            if !model.showSwitcher, model.currentGallery != nil, model.galleryReadyID != model.currentGalleryID {
+                VStack { Spacer(); ProgressView("正在准备图集…").tint(PunctumTheme.gold).padding().background(PunctumTheme.ink.opacity(0.9)); Spacer().frame(height: 24) }
+                    .allowsHitTesting(false)
             }
 
             if let detailIndex = model.detailIndex, !model.photos.isEmpty {
@@ -52,6 +67,10 @@ struct RootView: View {
                     onCommitMove: model.commitMovedPhoto,
                     onLoadMore: model.loadMorePhotos
                 )
+                .opacity(model.detailVisible ? 1 : 0)
+                .allowsHitTesting(model.detailVisible)
+                .animation(.easeOut(duration: model.detailVisible ? 0.18 : 0.14), value: model.detailVisible)
+                .task { await Task.yield(); model.revealDetail() }
                 .zIndex(20)
             }
 
@@ -60,7 +79,7 @@ struct RootView: View {
                     .zIndex(30)
             }
         }
-        .animation(.easeOut(duration: 0.16), value: model.showSwitcher)
+        .animation(.easeOut(duration: showingHome ? 0.16 : 0.18), value: showingHome)
         .sheet(isPresented: $model.showAlbumPicker) {
             AlbumPickerView(
                 existingIDs: Set(model.galleries.map(\.id)),

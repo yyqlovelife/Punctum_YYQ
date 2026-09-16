@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import UIKit
 
 struct PunctumGallery: Identifiable, Codable, Equatable, Hashable {
     let id: String
@@ -78,7 +79,7 @@ struct PhotoItem: Identifiable, Hashable {
     }
 
     var thumbnailTargetSize: CGSize {
-        let maxEdge: CGFloat = 360
+        let maxEdge: CGFloat = min(900, max(360, UIScreen.main.bounds.width * UIScreen.main.scale / 2))
         guard hasKnownSize else { return CGSize(width: maxEdge, height: maxEdge) }
         if aspectRatio >= 1 {
             return CGSize(width: maxEdge, height: (maxEdge / aspectRatio).rounded())

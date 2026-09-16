@@ -6,6 +6,73 @@ import UIKit
 final class PhotoLibraryService {
     static let shared = PhotoLibraryService()
 
+    private var orderGeneration = 0
+    private var completedOrderGeneration: [String: Int] = [:]
+    private var pinnedOrder: [String: [PHAsset]] = [:]
+    private var captureOrder: [String: [PHAsset]] = [:]
+    private var indexing: [String: Task<Void, Never>] = [:]
+
+    func prepareCaptureOrder(for gallery: PunctumGallery) async {
+        if completedOrderGeneration[gallery.id] == orderGeneration { return }
+        if let task = indexing[gallery.id] { await task.value; return }
+        let generation = orderGeneration
+        let task = Task { @MainActor in
+            let result = photoResult(for: gallery)
+            var assets: [PHAsset] = []
+            result.enumerateObjects { asset, _, _ in assets.append(asset) }
+            for (index, asset) in assets.enumerated() {
+                guard !Task.isCancelled else { return }
+                await CaptureDateIndex.shared.prepare(asset)
+                if index.isMultiple(of: 32) { await Task.yield() }
+            }
+            guard generation == orderGeneration, !Task.isCancelled else { return }
+            captureOrder[gallery.id] = assets.sorted {
+                let a = CaptureDateIndex.shared.date(for: $0), b = CaptureDateIndex.shared.date(for: $1)
+                if a != b { return a > b }
+                if $0.modificationDate != $1.modificationDate { return ($0.modificationDate ?? .distantPast) > ($1.modificationDate ?? .distantPast) }
+                return $0.localIdentifier < $1.localIdentifier
+            }
+            completedOrderGeneration[gallery.id] = generation
+            CaptureDateIndex.shared.save()
+        }
+        indexing[gallery.id] = task
+        await task.value
+        if generation == orderGeneration { indexing[gallery.id] = nil }
+    }
+
+    private func orderedAssets(for gallery: PunctumGallery) -> [PHAsset] {
+        if let pinned = pinnedOrder[gallery.id] { return pinned }
+        if let ordered = captureOrder[gallery.id] { return ordered }
+        let result = photoResult(for: gallery)
+        var assets: [PHAsset] = []
+        result.enumerateObjects { asset, _, _ in assets.append(asset) }
+        return assets
+    }
+
+    func pinCaptureOrder(for gallery: PunctumGallery) { pinnedOrder[gallery.id] = orderedAssets(for: gallery) }
+    func unpinCaptureOrder() { pinnedOrder.removeAll() }
+
+    func invalidateCaptureOrder() {
+        orderGeneration += 1
+        indexing.values.forEach { $0.cancel() }; indexing.removeAll()
+        // Keep the last coherent order until a fresh index is complete.
+    }
+
+    func prepareThumbnail(_ photo: PhotoItem) async {
+        let size = photo.thumbnailTargetSize
+        if PhotoThumbnailCache.shared.image(for: photo.id, size: size) != nil { return }
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.resizeMode = .exact
+            options.isNetworkAccessAllowed = true
+            PHImageManager.default().requestImage(for: photo.asset, targetSize: size, contentMode: .aspectFit, options: options) { image, _ in
+                continuation.resume(returning: image)
+            }
+        }
+        if let image { PhotoThumbnailCache.shared.store(image, for: photo.id, size: size) }
+    }
+
     var authorizationStatus: PHAuthorizationStatus {
         PHPhotoLibrary.authorizationStatus(for: .readWrite)
     }
@@ -86,12 +153,12 @@ final class PhotoLibraryService {
         startIndex: Int,
         limit: Int
     ) -> PhotoPage {
-        let result = photoResult(for: gallery)
+        let result = orderedAssets(for: gallery)
         var photos: [PhotoItem] = []
         photos.reserveCapacity(min(max(limit, 0), max(result.count - startIndex, 0)))
         var index = max(startIndex, 0)
         while index < result.count && photos.count < limit {
-            let asset = result.object(at: index)
+            let asset = result[index]
             index += 1
             guard !excludedIDs.contains(asset.localIdentifier) else { continue }
             photos.append(PhotoItem(asset: asset, name: "Photo"))
@@ -125,15 +192,8 @@ final class PhotoLibraryService {
         limit: Int = 4,
         excluding excludedIDs: Set<String> = []
     ) -> [PhotoItem] {
-        let result = photoResult(for: gallery, limit: max(limit + excludedIDs.count, limit))
-        var photos: [PhotoItem] = []
-        for index in 0..<result.count {
-            let asset = result.object(at: index)
-            guard !excludedIDs.contains(asset.localIdentifier) else { continue }
-            photos.append(PhotoItem(asset: asset, name: "Photo"))
-            if photos.count == limit { break }
-        }
-        return photos.sorted(by: newestFirst).prefix(limit).map { $0 }
+        orderedAssets(for: gallery).filter { !excludedIDs.contains($0.localIdentifier) }
+            .prefix(limit).map { PhotoItem(asset: $0, name: "Photo") }
     }
 
     func photoItems(localIdentifiers: [String]) -> [PhotoItem] {
@@ -150,22 +210,11 @@ final class PhotoLibraryService {
         for gallery: PunctumGallery,
         excluding excludedIDs: Set<String> = []
     ) -> GalleryOverview? {
-        let result = photoResult(for: gallery)
-        var count = result.count
-        var newest: Date? = result.firstObject?.creationDate
-        var oldest: Date? = result.lastObject?.creationDate
-
-        if !excludedIDs.isEmpty {
-            count = 0
-            newest = nil
-            oldest = nil
-            result.enumerateObjects { asset, _, _ in
-                guard !excludedIDs.contains(asset.localIdentifier) else { return }
-                count += 1
-                if newest == nil { newest = asset.creationDate }
-                oldest = asset.creationDate
-            }
-        }
+        let assets = orderedAssets(for: gallery).filter { !excludedIDs.contains($0.localIdentifier) }
+        let count = assets.count
+        let dates = assets.map { CaptureDateIndex.shared.date(for: $0) }
+        let newest = dates.max()
+        let oldest = dates.min()
 
         return GalleryOverview(
             gallery: gallery,

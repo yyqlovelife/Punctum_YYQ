@@ -15,12 +15,18 @@ struct SwitcherScreen: View {
     let onDelete: (Int) -> Void
 
     @State private var showSort = false
+    @State private var addAfterSortDismissal = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var displayedStyle: InvitationCardStyle?
+    @State private var cardsVisible = true
+    private var activeStyle: InvitationCardStyle { displayedStyle ?? invitationStyle }
 
     var body: some View {
         GeometryReader { geometry in
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    SectionLabel(text: "SELECT EXHIBITION")
+                    SectionLabel(text: "- PUNCTUM · STUDIUM -")
+                        .frame(height: 44).offset(y: 1)
                     Spacer()
                     HStack(spacing: 10) {
                         headerIconButton(
@@ -40,7 +46,7 @@ struct SwitcherScreen: View {
                 .frame(height: 44)
                 .padding(.leading, 24)
                 .padding(.trailing, 12)
-                .padding(.top, geometry.safeAreaInsets.top + 16)
+                .padding(.top, geometry.safeAreaInsets.top + 22)
 
                 Text("Your Punctums")
                     .font(PunctumTheme.georgia(titleSize(for: geometry.size.width), bold: true))
@@ -62,56 +68,73 @@ struct SwitcherScreen: View {
                         galleries: galleries,
                         overviews: overviews,
                         availableWidth: geometry.size.width,
-                        isActive: invitationStyle == .postcard,
+                        isActive: activeStyle == .postcard,
                         scrollToGalleryID: scrollToGalleryID,
                         onSelect: onSelect
                     )
-                    .opacity(invitationStyle == .postcard ? 1 : 0)
-                    .allowsHitTesting(invitationStyle == .postcard)
+                    .opacity(activeStyle == .postcard ? 1 : 0)
+                    .allowsHitTesting(activeStyle == .postcard)
 
                     TicketList(
                         galleries: galleries,
                         overviews: overviews,
-                        isActive: invitationStyle == .ticket,
+                        isActive: activeStyle == .ticket,
                         scrollToGalleryID: scrollToGalleryID,
                         onSelect: onSelect
                     )
-                    .opacity(invitationStyle == .ticket ? 1 : 0)
-                    .allowsHitTesting(invitationStyle == .ticket)
+                    .opacity(activeStyle == .ticket ? 1 : 0)
+                    .allowsHitTesting(activeStyle == .ticket)
 
                     ReversalFilmGrid(
                         galleries: galleries,
                         overviews: overviews,
                         availableWidth: geometry.size.width,
-                        isActive: invitationStyle == .reversalFilm,
+                        isActive: activeStyle == .reversalFilm,
                         scrollToGalleryID: scrollToGalleryID,
                         onSelect: onSelect
                     )
-                    .opacity(invitationStyle == .reversalFilm ? 1 : 0)
-                    .allowsHitTesting(invitationStyle == .reversalFilm)
+                    .opacity(activeStyle == .reversalFilm ? 1 : 0)
+                    .allowsHitTesting(activeStyle == .reversalFilm)
                 }
+                .opacity(cardsVisible ? 1 : 0)
+                .scaleEffect(reduceMotion || cardsVisible ? 1 : 0.96)
+                .offset(y: reduceMotion || cardsVisible ? 0 : 12)
+                .allowsHitTesting(cardsVisible)
                 .padding(.top, 26)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(PunctumTheme.ink)
             .ignoresSafeArea(edges: .top)
         }
+        .task(id: invitationStyle) {
+            guard displayedStyle != nil else { displayedStyle = invitationStyle; return }
+            guard activeStyle != invitationStyle else {
+                withAnimation(.easeOut(duration: 0.12)) { cardsVisible = true }; return
+            }
+            withAnimation(.easeOut(duration: 0.12)) { cardsVisible = false }
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            displayedStyle = invitationStyle
+            withAnimation(.timingCurve(0.23, 1, 0.32, 1, duration: 0.22)) { cardsVisible = true }
+        }
         .overlay {
             if showSort {
                 PunctumDialogBackdrop()
             }
         }
-        .sheet(isPresented: $showSort) {
+        .sheet(isPresented: $showSort, onDismiss: {
+            if addAfterSortDismissal { addAfterSortDismissal = false; onAdd() }
+        }) {
             SortGalleriesSheet(
                 galleries: galleries,
                 onMove: onMove,
                 onDelete: onDelete,
                 onAdd: {
+                    addAfterSortDismissal = true
                     showSort = false
-                    onAdd()
                 }
             )
             .presentationDetents([.medium, .large])
+            .presentationContentInteraction(.scrolls)
             .punctumDialogPresentation()
         }
     }
@@ -461,7 +484,7 @@ private struct PostcardInvitationCard: View {
                         }
                         .clipped()
                     Color.clear.frame(height: 22)
-                    VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 2) {
                         let dateLine = PunctumFormatting.compactSpan(overview.timeSpan)
                         Text("关于 \(overview.count) 幅作品的故事")
                             .font(PunctumTheme.serifSC(12))
@@ -512,7 +535,7 @@ private struct PostcardFooter: View {
                 name: "postcard_footer_paper_texture",
                 fallback: Color(red: 196 / 255, green: 168 / 255, blue: 132 / 255)
             )
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("MOMENT · PUNCTUM · STUDIUM")
                     .font(PunctumTheme.georgia(9, bold: true))
                     .tracking(1.5)
@@ -766,20 +789,20 @@ private struct TicketInfoBand: View {
                 .scaleEffect(x: 0.92, anchor: .leading)
             Spacer().frame(height: 1)
             Text(story)
-                .font(PunctumTheme.serifSC(9))
+                .font(PunctumTheme.serifSC(7))
                 .fontWeight(.regular)
                 .foregroundStyle(Color(red: 5 / 255, green: 5 / 255, blue: 5 / 255))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-                .frame(height: 10, alignment: .center)
+                .frame(height: 8, alignment: .center)
             Spacer().frame(height: 3)
             Text(time)
-                .font(PunctumTheme.newsreader(9))
+                .font(PunctumTheme.newsreader(7))
                 .fontWeight(.regular)
                 .foregroundStyle(Color(red: 5 / 255, green: 5 / 255, blue: 5 / 255))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-                .frame(height: 9, alignment: .center)
+                .frame(height: 7, alignment: .center)
             Spacer().frame(height: 1)
             Rectangle()
                 .fill(Color.black.opacity(0.48))
@@ -1008,7 +1031,7 @@ private struct TicketNotch: View {
     }
 }
 
-private struct SortGalleriesSheet: View {
+private struct LegacySortGalleriesSheet: View {
     @Environment(\.dismiss) private var dismiss
     let galleries: [PunctumGallery]
     let onMove: (Int, Int) -> Void

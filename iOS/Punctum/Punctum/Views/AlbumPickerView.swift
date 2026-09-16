@@ -89,7 +89,7 @@ struct AlbumPickerView: View {
                 if !isMovePicker {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("确定") {
-                            let chosen = (albums ?? []).filter { selectedIDs.contains($0.id) }
+                            let chosen = (albums ?? []).filter { selectedIDs.contains($0.id) && !existingIDs.contains($0.id) }
                             onConfirm(chosen)
                         }
                         .font(PunctumTheme.serifSC(15))
@@ -130,7 +130,7 @@ private struct AlbumPickerRow: View {
                     .font(PunctumTheme.galleryListName(album.title, size: 15))
                     .foregroundStyle(isDisabled ? PunctumTheme.muted : PunctumTheme.bone)
                     .lineLimit(1)
-                mixedCaption(statusText ?? (alreadyAdded ? "已添加 · \(album.count) 项" : "\(album.count) 项"))
+                mixedCaption(statusText ?? (alreadyAdded ? "已添加" : "\(album.count) 项"))
                     .foregroundStyle(PunctumTheme.muted)
                     .lineLimit(1)
             }

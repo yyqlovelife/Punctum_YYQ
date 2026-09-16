@@ -187,19 +187,21 @@ private struct ImmediatePressButtonBody<Content: View>: View {
     @ViewBuilder let content: (Bool) -> Content
 
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPressed = false
     @State private var isCompletingTap = false
-    @State private var pressedAt: CFTimeInterval = 0
-
-    private let minimumPressedDuration: CFTimeInterval = 0.12
-    private let navigationDelay: CFTimeInterval = 0.24
 
     var body: some View {
-        content(isPressed)
+        content(reduceMotion ? false : isPressed)
+            .opacity(reduceMotion && isPressed ? 0.8 : 1)
             .contentShape(Rectangle())
             .overlay {
                 ImmediatePressGestureOverlay(onPhase: handleGesturePhase)
                     .allowsHitTesting(isEnabled)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+                isPressed = false
+                isCompletingTap = false
             }
     }
 
@@ -207,7 +209,6 @@ private struct ImmediatePressButtonBody<Content: View>: View {
         switch phase {
         case .began:
             guard isEnabled, !isCompletingTap else { return }
-            pressedAt = CACurrentMediaTime()
             withAnimation(.easeOut(duration: 0.11)) {
                 isPressed = true
             }
@@ -215,18 +216,11 @@ private struct ImmediatePressButtonBody<Content: View>: View {
         case .ended:
             guard isEnabled, isPressed, !isCompletingTap else { return }
             isCompletingTap = true
-            let elapsed = CACurrentMediaTime() - pressedAt
-            let releaseDelay = max(0, minimumPressedDuration - elapsed)
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + releaseDelay) {
-                withAnimation(.spring(response: 0.20, dampingFraction: 0.72)) {
-                    isPressed = false
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + navigationDelay) {
-                    action()
-                    isCompletingTap = false
-                }
+            withAnimation(.spring(response: 0.20, dampingFraction: 0.72)) {
+                isPressed = false
             }
+            action()
+            isCompletingTap = false
 
         case .cancelled:
             guard !isCompletingTap else { return }
@@ -263,6 +257,7 @@ private struct ImmediatePressGestureOverlay: UIViewRepresentable {
         recognizer.cancelsTouchesInView = false
         recognizer.delegate = context.coordinator
         view.addGestureRecognizer(recognizer)
+        context.coordinator.recognizer = recognizer
         return view
     }
 
@@ -272,26 +267,57 @@ private struct ImmediatePressGestureOverlay: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onPhase: (Phase) -> Void
+        weak var recognizer: UILongPressGestureRecognizer?
+        private var travel = PressTravelGate()
 
         init(onPhase: @escaping (Phase) -> Void) {
             self.onPhase = onPhase
+            super.init()
+            NotificationCenter.default.addObserver(self, selector: #selector(suspendPress),
+                name: UIApplication.willResignActiveNotification, object: nil)
+        }
+        deinit { NotificationCenter.default.removeObserver(self) }
+
+        @objc private func suspendPress() {
+            travel.cancel()
+            onPhase(.cancelled)
+            recognizer?.isEnabled = false
+            recognizer?.isEnabled = true
+        }
+
+        private func isScrolling(_ view: UIView?) -> Bool {
+            var ancestor = view?.superview
+            while let candidate = ancestor {
+                if let scroll = candidate as? UIScrollView, scroll.isDragging || scroll.isDecelerating { return true }
+                ancestor = candidate.superview
+            }
+            return false
         }
 
         @objc func handlePress(_ recognizer: UILongPressGestureRecognizer) {
+            let point = recognizer.location(in: recognizer.view?.window)
             switch recognizer.state {
             case .began:
-                onPhase(.began)
+                travel.begin(at: point)
+                if isScrolling(recognizer.view) { travel.cancel() }
+                onPhase(travel.isTap ? .began : .cancelled)
+            case .changed:
+                travel.move(to: point)
+                if isScrolling(recognizer.view) { travel.cancel() }
+                if !travel.isTap { onPhase(.cancelled) }
             case .ended:
-                guard let view = recognizer.view,
+                travel.move(to: point)
+                guard travel.isTap, !isScrolling(recognizer.view), let view = recognizer.view,
                       view.bounds.insetBy(dx: -4, dy: -4).contains(recognizer.location(in: view)) else {
                     onPhase(.cancelled)
                     return
                 }
+                travel.cancel()
                 onPhase(.ended)
             case .cancelled, .failed:
+                travel.cancel()
                 onPhase(.cancelled)
-            default:
-                break
+            default: break
             }
         }
 
@@ -429,4 +455,15 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+/// Once a press travels beyond tap slop, returning to its start never makes it a tap again.
+struct PressTravelGate {
+    private var start = CGPoint.zero
+    private(set) var isTap = false
+    mutating func begin(at point: CGPoint) { start = point; isTap = true }
+    mutating func move(to point: CGPoint) {
+        if hypot(point.x - start.x, point.y - start.y) > 10 { isTap = false }
+    }
+    mutating func cancel() { isTap = false }
 }

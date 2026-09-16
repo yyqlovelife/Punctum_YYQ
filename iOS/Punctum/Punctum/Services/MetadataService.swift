@@ -19,14 +19,33 @@ actor MetadataService {
         }
         metadataWaiters[photo.id] = []
 
-        let original = try? await originalData(for: photo)
+        // ImageIO can read the original file's metadata without copying the whole
+        // large image into Data. Fall back for assets without an editable file URL.
+        let input: PHContentEditingInput? = await withCheckedContinuation { continuation in
+            let options = PHContentEditingInputRequestOptions()
+            options.isNetworkAccessAllowed = true
+            options.canHandleAdjustmentData = { _ in true }
+            photo.asset.requestContentEditingInput(with: options) { input, _ in
+                continuation.resume(returning: input)
+            }
+        }
         let properties: [CFString: Any]
-        if let data = original?.data,
-           let source = CGImageSourceCreateWithData(data as CFData, nil),
+        let fileSize: Int
+        if let url = input?.fullSizeImageURL,
+           let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
            let raw = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
             properties = raw
+            fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         } else {
-            properties = [:]
+            let original = try? await originalData(for: photo)
+            fileSize = original?.data.count ?? 0
+            if let data = original?.data,
+               let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+               let raw = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+                properties = raw
+            } else {
+                properties = [:]
+            }
         }
 
         let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
@@ -54,7 +73,7 @@ actor MetadataService {
             aperture: PunctumFormatting.aperture(aperture),
             iso: isoValues?.first.map { "ISO \($0.intValue)" },
             resolution: photo.width > 0 && photo.height > 0 ? "\(photo.width) × \(photo.height)" : nil,
-            fileSize: PunctumFormatting.fileSize(original?.data.count ?? 0)
+            fileSize: PunctumFormatting.fileSize(fileSize)
         )
         cache[photo.id] = value
         let waiters = metadataWaiters.removeValue(forKey: photo.id) ?? []

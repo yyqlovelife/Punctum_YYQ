@@ -1,27 +1,42 @@
 # Punctum for iOS
 
-This directory contains the native SwiftUI iOS edition of Punctum. It now mirrors Android 0.5.3: three home invitation-card styles, newest-photo covers, Live Photo playback, and multi-select album adding.
+Native SwiftUI / UIKit edition of Punctum · 观止. Current version: **0.5.8 (build 58)**, updated 2026-09-16. Minimum deployment target: **iOS 17**. Bundle identifier: `com.chessyyq.punctum`.
 
-## Local build
+## Current experience
 
-1. Install the current full Xcode release. This project pins `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` in the unsigned IPA script; do not switch the global `xcode-select` unless you intend to.
-2. Run `xcodegen generate` in this directory if the generated project needs refreshing.
-3. Open `Punctum.xcodeproj`, choose an iPhone Simulator, and run the `Punctum` scheme.
+- Three invitation-card home styles, system-album mapping, original-aspect gallery layout, 80-photo pagination, and cached EXIF capture-time ordering.
+- Persistent gallery reordering with native drag, edge scrolling and content-first sheet scrolling; already-added albums stay locked in the picker.
+- Photo-only pinch zoom and two-finger panning with spring return; metadata stays fixed. Live Photos support hold playback and one-shot badge playback.
+- Native snapshot swipe deletion with resisted drag and a **280ms** shrink toward the trash target. The user confirmed the smoother interaction and final timing. Deletions remain pending until confirmation on leaving detail.
+- Full-frame background decoding, shared image requests, per-photo EXIF prefetch, portrait top alignment, and foreground gesture cleanup.
 
-The project uses bundle identifier `com.chessyyq.punctum`, version `0.5.3` (build `53`), and iOS 17 as its deployment target. See the top of [`changelog/ios.md`](../../changelog/ios.md) and the handoff section in [`CHANGELOG.md`](../../CHANGELOG.md) for the current formal baseline.
+The legacy SwiftUI deletion path remains behind `nativeDeletionEnabled` in `Views/DetailScreen.swift`. Do not restore the abandoned dynamic pager placeholders, portrait safe-area gap, or modified-time sorting toggle.
 
-## 0.5.1 parity notes
+## Build and test
 
-- Home style cycles postcard → ticket → reversal film. Scroll position is kept per style for the session; the last style is persisted.
-- Postcard cards use the kraft footer, `PUNCTUMS` watermark, and `MOMENT · PUNCTUM · STUDIUM` / `TAP TO ENTER EXHIBITION`. Ticket stubs use inward semicircle notches. Reversal film is a two-column 1:1 grid with a 3:2 inset cover.
-- Covers use the newest `PHAsset` by `creationDate` (iOS equivalent of EXIF DateTimeOriginal): ticket / reversal film use 1 photo, postcard uses 4.
-- Live Photos play with `PHLivePhotoView`: hold 150ms to loop, release to halt immediately, badge plays once, 200ms fade-in after playback begins, no fade-out on stop.
-- Adding galleries is a multi-select list of user albums plus Recents / Screenshots / Selfies / Panoramas. Confirm returns to the home cards, toasts「添加完成」, and scrolls to the first newly added gallery.
-- Gallery rows size from real `pixelWidth` / `pixelHeight` and skip square degraded thumbnails so the first row does not collapse to 1:1.
-- Paper textures are the same Android drawable JPEGs bundled as iOS resources.
+Use full Xcode and XcodeGen. The unsigned IPA script pins `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`; no global xcode-select change is required.
 
-## Device distribution
+```bash
+# From this directory
+xcodegen generate
+open Punctum.xcodeproj
 
-A device archive requires an Apple Developer team, a distribution certificate, and a matching provisioning profile. Simulator builds cannot be installed on an iPhone. An unsigned IPA can still be produced with `scripts/build-unsigned-ipa.sh`.
+# Choose an available simulator; list devices with xcrun simctl list devices.
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project Punctum.xcodeproj -scheme Punctum -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 14 Pro' \
+  CODE_SIGNING_ALLOWED=NO test
 
-APK and IPA build outputs are intentionally excluded from Git and should be regenerated on each development machine.
+# Build and package the current source for AltStore signing
+scripts/build-unsigned-ipa.sh
+```
+
+The packaging script writes `../IPA/Punctum-0.5.8-unsigned.ipa`. The accepted local delivery is named `Punctum-0.5.8-native-delete-280ms-unsigned.ipa`; both names refer to the same current source when rebuilt at this revision. Do not run concurrent xcodebuild jobs against one DerivedData directory.
+
+## Verification and distribution
+
+The latest regression run passed 21 tests; the final 280ms Release build passed. Tests cover models, EXIF dates, decoding, layout, tap travel and motion continuity, not physical frame rate. User confirmation covers native deletion feel and timing; other interaction combinations retain their own verification status.
+
+Use AltStore / AltServer to sign the unsigned IPA, preserving the existing Apple account/app identity for an overlay install. Simulator builds cannot run on an iPhone. Signing certificates, provisioning profiles and credentials stay outside Git. Android resources referenced by this project are included in the repository; clone the full repository when moving machines.
+
+See [iOS changelog](../../changelog/ios.md), [handoff](../../PUNCTUM_HANDOFF.md), [verification history](../../design-qa.md), and [version index](../../CHANGELOG.md).

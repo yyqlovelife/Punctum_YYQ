@@ -8,6 +8,8 @@ Punctum 是双端产品。Android 与 iOS 各自维护一份按版本倒序的�
 |---|---|
 | [`changelog/android.md`](android.md) | Android 更新说明 |
 | [`changelog/ios.md`](ios.md) | iOS 更新说明 |
+| [`PUNCTUM_HANDOFF.md`](../PUNCTUM_HANDOFF.md) | 当前源码、回退开关、构建和验收边界；随源码上传 |
+| [`design-qa.md`](../design-qa.md) | 历史构建、实验与用户验收证据 |
 | [`CHANGELOG.md`](../CHANGELOG.md) | 根目录索引 +「当前交接状态」（版本、安装包、构建、禁止事项） |
 
 两端细节写在 `android.md` / `ios.md`。根目录那一份只指路，并给接手人一段能立刻开工的现状。
@@ -47,3 +49,11 @@ Punctum 是双端产品。Android 与 iOS 各自维护一份按版本倒序的�
 Android 的 `versionCode`、iOS 的 build 号与 `versionName` / `MARKETING_VERSION` 的末两位对齐，例如 `0.5.1` → `51`。
 
 两端版本号默认对齐。若某一端单独发版，只改那一端的文件，并在该节开头标明「仅 Android」或「仅 iOS」。
+
+
+## 定稿与 GitHub 同步
+
+- 用户在同一版本内确认最终参数时，更新该版本当前说明，明确已确认的具体范围；旧实验保留在历史章节或 design-qa.md，不能继续标成当前默认方案。
+- README、iOS/Punctum/README.md、CHANGELOG.md 和 PUNCTUM_HANDOFF.md 使用一致版本、默认参数与最新安装包路径。
+- 用户明确要求上传时，同步本次源码、项目配置、测试、文档和构建脚本，上传后独立核对远端分支及文件树。本地提交不等于远端上传成功。
+- APK/IPA、签名文件、证书、profile、密码和本地机器配置不纳入 Git。交接以仓库内相对路径为主，本机日志路径只作为历史证据。

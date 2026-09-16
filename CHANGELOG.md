@@ -1,15 +1,25 @@
 # Punctum 更新说明
 
-Android 与 iOS 分开记，按版本倒序。写法见 [`changelog/README.md`](changelog/README.md)。
+Android 与 iOS 分开记录，按版本倒序。写法见 [`changelog/README.md`](changelog/README.md)。
 
-| 平台 | 当前版本号 | 工作区实际状态 | 完整日志 |
+| 平台 | 当前版本 | 当前确认状态 | 完整日志 |
 |---|---|---|---|
-| Android | `0.5.7`（versionCode `57`） | 正式版；另有 2026-09-03 至 09-04 未发版更新 | [`changelog/android.md`](changelog/android.md) |
-| iOS | `0.5.5`（build `55`） | 正式版；另有待下次发版收录的弹窗视觉更新 | [`changelog/ios.md`](changelog/ios.md) |
+| Android | `0.5.8 / 58` | 照片放大、双指平移与回弹已确认 | [`android.md`](changelog/android.md) |
+| iOS | `0.5.8 / 58` | 原生快照删除与 280ms 节奏已确认 | [`ios.md`](changelog/ios.md) |
 
----
+## 当前交接状态 · 2026-09-16
 
-## 当前交接状态 · 2026-09-07
+本次同步包含 Android 0.5.8 照片手势，以及 iOS 能力对齐、照片缩放和平移、分页/竖图/图集准备修复、EXIF 加载优化、首页及面板交互修复、原生删除动效。iOS 当前删除收缩为 **280ms**，用户已确认这个状态；旧 SwiftUI 路径和回退开关保留。两端版本不再增加。
+
+本次 GitHub 同步同时收录源码、项目配置、测试、README、分平台日志、验证记录和仓库内的 [`PUNCTUM_HANDOFF.md`](PUNCTUM_HANDOFF.md)，便于换电脑接续。完整实现、保护项和验收范围以交接文档为准。修改时间排序切换继续保持回退状态。
+
+最新本地产物：Android `APK/Punctum-0.5.8-release.apk`；iOS `iOS/IPA/Punctum-0.5.8-native-delete-280ms-unsigned.ipa`。构建脚本会生成通用版本名 IPA；带动效后缀的文件是本次验收留档。安装包和签名凭据不纳入 Git。
+
+Android Release/Lint 通过；iOS 最近一轮 21 项回归通过、最终 280ms Release 通过。详细证据与剩余复测边界见 [`design-qa.md`](design-qa.md)。
+
+以下保留历史记录，旧版本、旧 Git 状态及旧安装包不代表当前状态。
+
+## 历史交接状态 · 2026-09-07
 
 给接手同事的入口。本段以文档上一次正式基线 `2026-09-02 / f726124` 为起点，汇总此后完成的全部变化。Android 正式版保持 `0.5.6`：已修复大图返回列表时标题区受状态栏显隐影响而跳动的问题，调整删除动效、明信片与票据文字，完善图集排序弹窗的固定高度、跨页拖动、自动滚动和多处列表滚动提示；反转胶片卡最终恢复原版；首页顶部标签更新为 `- PUNCTUM · STUDIUM -`，三个首页模式整体下移 `6dp`；已加入的系统图集在添加面板中保持勾选并锁定；首页随机名言库由 17 条扩充到 28 条。以上内容等待下次正式发版收录。iOS 当前为正式 `0.5.5`，三类弹窗的视觉层级更新同样等待下次正式发版收录。
 

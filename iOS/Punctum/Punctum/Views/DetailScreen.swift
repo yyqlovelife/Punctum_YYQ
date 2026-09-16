@@ -14,9 +14,12 @@ struct DetailScreen: View {
 
     @State private var currentIndex: Int
     @State private var selectedPhotoID: String?
+    @State private var pinchActive = false
     @State private var controlsVisible = false
     @State private var deleteProgress: CGFloat = 0
     @State private var deletingGesture = false
+    @State private var deleteDragOrigin: CGFloat = 0
+    @State private var visiblePhotos: [PhotoItem]
     @State private var centerMessage: String?
     @State private var showDeleteHint = false
     @State private var saving = false
@@ -28,6 +31,8 @@ struct DetailScreen: View {
     @State private var showMovePicker = false
     @State private var moving = false
     @State private var deletionSettling = false
+    @State private var deletionCard: FrozenDeletionCard?
+    @State private var deletionFinishing = false
     @State private var frozenDeleteReplacementID: String?
     @State private var frozenDeleteReplacementDisplayNumber = 1
     @State private var pageViewGeneration = 0
@@ -52,6 +57,7 @@ struct DetailScreen: View {
         self.onCommitMove = onCommitMove
         self.onLoadMore = onLoadMore
         let initialIndex = min(max(startIndex, 0), max(photos.count - 1, 0))
+        _visiblePhotos = State(initialValue: photos)
         _currentIndex = State(initialValue: initialIndex)
         _selectedPhotoID = State(initialValue: photos.indices.contains(initialIndex) ? photos[initialIndex].id : nil)
         if let initialMetadata, photos.indices.contains(initialIndex) {
@@ -59,10 +65,6 @@ struct DetailScreen: View {
         } else {
             _preparedMetadata = State(initialValue: [:])
         }
-    }
-
-    private var visiblePhotos: [PhotoItem] {
-        photos.filter { !pendingDeletedIDs.contains($0.id) }
     }
 
     private var currentPhoto: PhotoItem? {
@@ -92,6 +94,12 @@ struct DetailScreen: View {
         return (replacement.photo, min(replacement.index, currentIndex) + 1)
     }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Full-screen release travel needs more time than the former 200ms exit.
+    // Keep this shared with the commit delay so the fixed card is never removed early.
+    private let deletionExitMilliseconds = 400
+    private let nativeDeletionEnabled = true // Set false to compare the retained SwiftUI path.
     private var armed: Bool { deleteProgress >= 0.72 }
 
     var body: some View {
@@ -104,67 +112,77 @@ struct DetailScreen: View {
                 PunctumTheme.ink.ignoresSafeArea()
 
                 if let replacement = presentedDeleteReplacement {
-                    DetailPage(
-                        photo: replacement.photo,
-                        displayNumber: replacement.displayNumber,
-                        screenSize: screenSize,
-                        safeAreaTop: geometry.safeAreaInsets.top,
-                        livePlaybackActive: .constant(false),
-                        pagingEnabled: false,
-                        isSelected: false,
-                        initialMetadata: preparedMetadata[replacement.photo.id],
-                        interactionLocked: false,
-                        onPrevious: {},
-                        onNext: {},
-                        onToggleControls: {}
+                    StaticDeletionPage(
+                        card: FrozenDeletionCard(photo: replacement.photo, displayNumber: replacement.displayNumber,
+                                                 metadata: preparedMetadata[replacement.photo.id]),
+                        screenSize: screenSize, safeAreaTop: geometry.safeAreaInsets.top
                     )
+                    .equatable()
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
-                    .overlay(Color.black.opacity(deletionSettling ? 0 : 0.48 * (1 - revealProgress)))
-                    .opacity(deleteProgress > 0 || deletionSettling ? 1 : 0)
+                    .overlay(Color.black.opacity(nativeDeletionEnabled || deletionSettling ? 0 : 0.48 * (1 - revealProgress)))
+                    .opacity(deletionCard != nil || deleteProgress > 0 || deletionSettling ? 1 : 0)
                 }
 
                 if !visiblePhotos.isEmpty {
-                    TabView(selection: $currentIndex) {
-                        ForEach(Array(visiblePhotos.enumerated()), id: \.element.id) { index, photo in
-                            DetailPage(
-                                photo: photo,
-                                displayNumber: index + 1,
-                                screenSize: screenSize,
-                                safeAreaTop: geometry.safeAreaInsets.top,
-                                livePlaybackActive: $livePlaybackActive,
-                                pagingEnabled: true,
-                                isSelected: index == currentIndex,
-                                initialMetadata: preparedMetadata[photo.id],
-                                interactionLocked: deletingGesture || deleteProgress > 0 || deletionSettling,
-                                onPrevious: {
-                                    if index > 0 { currentIndex = index - 1 }
-                                },
-                                onNext: {
-                                    if index < visiblePhotos.count - 1 { currentIndex = index + 1 }
-                                },
-                                onToggleControls: {
-                                    withAnimation(.easeOut(duration: 0.16)) { controlsVisible.toggle() }
+                    NativeDeletionPager(
+                        enabled: nativeDeletionEnabled && !pinchActive && !livePlaybackActive && !deletionFinishing,
+                        excludedTop: controlsVisible ? geometry.safeAreaInsets.top + DetailControls.rowHeight : 0,
+                        targetY: geometry.safeAreaInsets.top + 82,
+                        reduceMotion: reduceMotion,
+                        onBegin: beginNativeDeletion,
+                        onArm: { deleteProgress = $0 ? 0.75 : 0.1 },
+                        onRelease: { deletionFinishing = true },
+                        onComplete: completeNativeDeletion,
+                        onSettled: settleNativeDeletion
+                    ) {
+                        DetailPager(
+                            photos: visiblePhotos,
+                            selectedIndex: currentIndex,
+                            selection: Binding(
+                                get: { currentIndex },
+                                set: { index in
+                                    guard deletionCard == nil, !deletionSettling, !pinchActive else { return }
+                                    currentIndex = index
                                 }
-                            )
-                            .tag(index)
-                        }
+                            ),
+                            livePlaybackActive: $livePlaybackActive,
+                            pinchActive: $pinchActive,
+                            screenSize: screenSize,
+                            safeAreaTop: geometry.safeAreaInsets.top,
+                            metadata: preparedMetadata,
+                            locked: deletionCard != nil || deletionSettling,
+                            generation: pageViewGeneration,
+                            onToggleControls: {
+                                withAnimation(.easeOut(duration: 0.16)) { controlsVisible.toggle() }
+                            }
+                        )
+                        .equatable()
                     }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
-                    .id(pageViewGeneration)
-                    .background(PagingScrollLock(
-                        locked: deletingGesture || deleteProgress > 0 || deletionSettling
-                    ))
+                    .opacity(!nativeDeletionEnabled && (deletionCard != nil || deletionSettling) ? 0 : 1)
+                    .allowsHitTesting(nativeDeletionEnabled || (deletionCard == nil && !deletionSettling))
+                    .accessibilityHidden(deletionCard != nil || deletionSettling)
+                }
+
+                // Keep the single-photo surface mounted before the gesture begins.
+                // Its inputs stay fixed while dragging; progress only changes outer transforms.
+                if !nativeDeletionEnabled, let card = deletionCard ?? currentPhoto.map({
+                    FrozenDeletionCard(photo: $0, displayNumber: currentIndex + 1, metadata: preparedMetadata[$0.id])
+                }) {
+                    StaticDeletionPage(card: card, screenSize: screenSize, safeAreaTop: geometry.safeAreaInsets.top)
+                    .equatable()
+                    .id(card.photo.id)
+                    .clipShape(RoundedRectangle(cornerRadius: pageRadius, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: pageRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.09), lineWidth: 0.5)
+                    }
                     .scaleEffect(pageScale)
                     .offset(y: pageOffset(screenHeight: screenSize.height))
-                    .rotationEffect(.degrees(pageRotation))
-                    .clipShape(RoundedRectangle(cornerRadius: pageRadius, style: .continuous))
-                    .shadow(
-                        color: .black.opacity(0.42 * baseDeleteProgress),
-                        radius: 18 * baseDeleteProgress,
-                        y: 10 * baseDeleteProgress
-                    )
-                    .opacity(deletionSettling ? 0 : 1)
+                    // Avoid rerasterizing a full-page blurred shadow on every drag update.
+                    .opacity(deletionCard != nil && !deletionSettling ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 }
 
                 if deleteProgress > 0 {
@@ -194,7 +212,7 @@ struct DetailScreen: View {
                         .transition(.opacity)
                 }
 
-                if controlsVisible {
+                if controlsVisible, deletionCard == nil {
                     DetailControls(
                         saving: saving,
                         onClose: closeDetail,
@@ -208,8 +226,17 @@ struct DetailScreen: View {
                 }
             }
             .contentShape(Rectangle())
-            .simultaneousGesture(deleteGesture(safeAreaTop: geometry.safeAreaInsets.top))
+            .modifier(LegacyDeletionGesture(enabled: !nativeDeletionEnabled, gesture: deleteGesture(safeAreaTop: geometry.safeAreaInsets.top)))
             .ignoresSafeArea()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            livePlaybackActive = false
+            guard !nativeDeletionEnabled else { return }
+            guard !deletionFinishing, !deletionSettling else { return }
+            deletingGesture = false
+            deleteProgress = 0
+            deletionCard = nil
+            frozenDeleteReplacementID = nil
         }
         .statusBarHidden(!controlsVisible)
         .persistentSystemOverlays(.hidden)
@@ -221,7 +248,11 @@ struct DetailScreen: View {
             if visiblePhotos.indices.contains(index) { selectedPhotoID = visiblePhotos[index].id }
             if index >= photos.count - 4 { onLoadMore() }
         }
-        .onChange(of: visiblePhotos.map(\.id)) { _, photoIDs in
+        .onChange(of: photos) { _, updated in
+            visiblePhotos = updated.filter { !pendingDeletedIDs.contains($0.id) }
+        }
+        .onChange(of: visiblePhotos) { _, updated in
+            let photoIDs = updated.map(\.id)
             guard !photoIDs.isEmpty else {
                 closeDetail()
                 return
@@ -249,7 +280,7 @@ struct DetailScreen: View {
             if count < 2 { defaults.set(count + 1, forKey: "delete_red_toast_count") }
         }
         .task { await showTutorialsIfNeeded() }
-        .task(id: currentIndex) {
+        .task(id: currentPhoto?.id) {
             await prepareMetadata(around: currentIndex)
         }
         .sheet(item: $sharePayload) { payload in
@@ -278,9 +309,11 @@ struct DetailScreen: View {
     }
 
     private func prepareMetadata(around index: Int) async {
-        guard !visiblePhotos.isEmpty else { return }
-        let lowerBound = max(index - 4, 0)
-        let upperBound = min(index + 4, visiblePhotos.count - 1)
+        // Coalesce rapid paging before reading originals for EXIF.
+        do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+        guard !visiblePhotos.isEmpty, !Task.isCancelled else { return }
+        let lowerBound = max(index - 1, 0)
+        let upperBound = min(index + 1, visiblePhotos.count - 1)
         let candidates = visiblePhotos[lowerBound...upperBound].filter {
             preparedMetadata[$0.id] == nil
         }
@@ -300,9 +333,48 @@ struct DetailScreen: View {
         }
     }
 
+    private func beginNativeDeletion() -> Bool {
+        guard deletionCard == nil, !deletionSettling, !pinchActive,
+              !livePlaybackActive, let photo = currentPhoto else { return false }
+        deletionCard = FrozenDeletionCard(photo: photo, displayNumber: currentIndex + 1,
+                                          metadata: preparedMetadata[photo.id])
+        if let replacement = deleteReplacement {
+            frozenDeleteReplacementID = replacement.photo.id
+            frozenDeleteReplacementDisplayNumber = min(replacement.index, currentIndex) + 1
+        }
+        deleteProgress = 0.1
+        return true
+    }
+
+    private func completeNativeDeletion(_ commit: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            deletionSettling = true
+            if commit, let photo = deletionCard?.photo {
+                let replacement = deleteReplacement
+                if let replacement {
+                    selectedPhotoID = replacement.photo.id
+                    currentIndex = replacement.index > currentIndex ? currentIndex : max(currentIndex - 1, 0)
+                }
+                queueDeletion(photo)
+                pageViewGeneration += 1
+            }
+            deleteProgress = 0
+        }
+    }
+
+    private func settleNativeDeletion() {
+        deletionSettling = false
+        frozenDeleteReplacementID = nil
+        deletionCard = nil
+        deletionFinishing = false
+    }
+
     private func deleteGesture(safeAreaTop: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .local)
             .onChanged { value in
+                guard !deletionFinishing, !deletionSettling, !pinchActive else { return }
                 guard !livePlaybackActive else {
                     deletingGesture = false
                     deleteProgress = 0
@@ -317,6 +389,10 @@ struct DetailScreen: View {
                 let verticalIntent = abs(value.translation.height) > abs(value.translation.width) * 1.2
                 if !deletingGesture {
                     let shouldStart = value.translation.height < 0 && verticalIntent
+                    if shouldStart, let photo = currentPhoto {
+                        deleteDragOrigin = upward
+                        deletionCard = FrozenDeletionCard(photo: photo, displayNumber: currentIndex + 1, metadata: preparedMetadata[photo.id])
+                    }
                     if shouldStart, let replacement = deleteReplacement {
                         frozenDeleteReplacementID = replacement.photo.id
                         frozenDeleteReplacementDisplayNumber = min(replacement.index, currentIndex) + 1
@@ -324,21 +400,29 @@ struct DetailScreen: View {
                     deletingGesture = shouldStart
                 }
                 if deletingGesture {
-                    deleteProgress = min(upward / 180, 1)
+                    // Gesture recognition can deliver its first sample late. Start at
+                    // the current finger position, then follow without inherited animation.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        deleteProgress = min(max(upward - deleteDragOrigin, 0) / 140, 1)
+                    }
                 }
             }
             .onEnded { _ in
+                guard !deletionFinishing, !deletionSettling, !pinchActive else { return }
                 guard deletingGesture else {
                     deleteProgress = 0
                     return
                 }
                 deletingGesture = false
-                if armed, let photo = currentPhoto {
-                    withAnimation(.timingCurve(0.18, 0.74, 0.25, 1, duration: 0.34)) {
+                deletionFinishing = true
+                if armed, let photo = deletionCard?.photo {
+                    withAnimation(.timingCurve(0.18, 0.74, 0.25, 1, duration: reduceMotion ? 0 : Double(deletionExitMilliseconds) / 1_000)) {
                         deleteProgress = 1.55
                     }
                     Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(350))
+                        try? await Task.sleep(for: .milliseconds(reduceMotion ? 210 : deletionExitMilliseconds + 10))
                         let replacement = deleteReplacement
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
@@ -359,16 +443,27 @@ struct DetailScreen: View {
                         withTransaction(transaction) {
                             deletionSettling = false
                             frozenDeleteReplacementID = nil
+                            deletionCard = nil
+                            deletionFinishing = false
                         }
                     }
                 } else {
-                    withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.88)) {
+                    withAnimation(reduceMotion ? nil : .interactiveSpring(response: 0.30, dampingFraction: 0.88)) {
                         deleteProgress = 0
                     }
                     Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(310))
                         guard deleteProgress == 0, !deletionSettling else { return }
-                        frozenDeleteReplacementID = nil
+                        // Rebuild the hidden pager at the unchanged selection before revealing it.
+                        var transaction = Transaction(); transaction.disablesAnimations = true
+                        withTransaction(transaction) { pageViewGeneration += 1 }
+                        await Task.yield()
+                        try? await Task.sleep(for: .milliseconds(50))
+                        withTransaction(transaction) {
+                            frozenDeleteReplacementID = nil
+                            deletionCard = nil
+                            deletionFinishing = false
+                        }
                     }
                 }
             }
@@ -376,12 +471,11 @@ struct DetailScreen: View {
 
     private var baseDeleteProgress: CGFloat { min(max(deleteProgress, 0), 1) }
     private var extraDeleteProgress: CGFloat { min(max(deleteProgress - 1, 0), 0.55) / 0.55 }
-    private var pageScale: CGFloat { 1 - baseDeleteProgress * 0.10 - extraDeleteProgress * 0.06 }
+    private var pageScale: CGFloat { reduceMotion ? 1 : 1 - baseDeleteProgress * 0.10 - extraDeleteProgress * 0.06 }
     private func pageOffset(screenHeight: CGFloat) -> CGFloat {
-        -baseDeleteProgress * 180 - extraDeleteProgress * max(screenHeight * 0.82, 520)
+        -baseDeleteProgress * (reduceMotion ? 40 : 180) - extraDeleteProgress * max(screenHeight * 0.82, 520)
     }
     private var pageRadius: CGFloat { baseDeleteProgress * 20 + extraDeleteProgress * 8 }
-    private var pageRotation: Double { Double(-baseDeleteProgress * 0.8 - extraDeleteProgress * 0.8) }
     private var revealProgress: CGFloat { min(max((deleteProgress - 0.22) / 1.33, 0), 1) }
 
     private func moveCurrentPhoto(to album: AlbumOption) {
@@ -413,6 +507,7 @@ struct DetailScreen: View {
     private func queueDeletion(_ photo: PhotoItem) {
         guard pendingDeletedIDs.insert(photo.id).inserted else { return }
         pendingDeletedPhotos.append(photo)
+        visiblePhotos.removeAll { $0.id == photo.id }
         UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
         livePlaybackActive = false
     }
@@ -530,6 +625,72 @@ private struct DetailControls: View {
     }
 }
 
+private struct FrozenDeletionCard: Equatable {
+    let photo: PhotoItem
+    let displayNumber: Int
+    let metadata: PhotoMetadata?
+}
+
+/// Isolate the expensive page collection from per-frame deletion progress updates.
+private struct DetailPager: View, Equatable {
+    let photos: [PhotoItem]
+    let selectedIndex: Int
+    @Binding var selection: Int
+    @Binding var livePlaybackActive: Bool
+    @Binding var pinchActive: Bool
+    let screenSize: CGSize
+    let safeAreaTop: CGFloat
+    let metadata: [String: PhotoMetadata]
+    let locked: Bool
+    let generation: Int
+    let onToggleControls: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.photos == rhs.photos && lhs.selectedIndex == rhs.selectedIndex
+            && lhs.screenSize == rhs.screenSize && lhs.safeAreaTop == rhs.safeAreaTop
+            && lhs.metadata == rhs.metadata && lhs.locked == rhs.locked
+            && lhs.generation == rhs.generation
+    }
+
+    var body: some View {
+        TabView(selection: $selection) {
+            ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                DetailPage(
+                    photo: photo, displayNumber: index + 1,
+                    screenSize: screenSize, safeAreaTop: safeAreaTop,
+                    livePlaybackActive: $livePlaybackActive,
+                    pinchActive: $pinchActive,
+                    pagingEnabled: true, isSelected: index == selectedIndex,
+                    initialMetadata: metadata[photo.id], interactionLocked: locked,
+                    onPrevious: { if !locked, !pinchActive, index > 0 { selection = index - 1 } },
+                    onNext: { if !locked, !pinchActive, index < photos.count - 1 { selection = index + 1 } },
+                    onToggleControls: onToggleControls
+                )
+                .tag(index)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .id(generation)
+        .background(PagingScrollLock(locked: locked))
+    }
+}
+
+/// A pre-mounted noninteractive page; drag changes never rebuild its photo or text subtree.
+private struct StaticDeletionPage: View, Equatable {
+    let card: FrozenDeletionCard
+    let screenSize: CGSize
+    let safeAreaTop: CGFloat
+
+    var body: some View {
+        DetailPage(
+            photo: card.photo, displayNumber: card.displayNumber,
+            screenSize: screenSize, safeAreaTop: safeAreaTop,
+            livePlaybackActive: .constant(false), pagingEnabled: false,
+            isSelected: false, initialMetadata: card.metadata, interactionLocked: true
+        )
+    }
+}
+
 private enum DetailLiveBadge {
     static let visualPadding: CGFloat = 6
     static let hotSize: CGFloat = 44
@@ -541,6 +702,13 @@ private struct DetailPage: View {
     let screenSize: CGSize
     let safeAreaTop: CGFloat
     @Binding var livePlaybackActive: Bool
+    var pinchActive: Binding<Bool> = .constant(false)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var zoomTouchActive = false
+    @State private var zoomScale: CGFloat = 1
+    @State private var zoomOffset: CGSize = .zero
+    @State private var zoomAnchor: UnitPoint = .center
+    @State private var zoomResetTask: Task<Void, Never>?
     var pagingEnabled: Bool = true
     var isSelected: Bool = true
     var initialMetadata: PhotoMetadata? = nil
@@ -593,6 +761,7 @@ private struct DetailPage: View {
                         livePhoto: livePhoto,
                         playbackMode: playbackMode,
                         hasBegunPlayback: hasBegunPlayback,
+                        zoomScale: zoomScale, zoomAnchor: zoomAnchor, zoomOffset: zoomOffset,
                         onFrameChange: { imageFrameInPage = $0 },
                         onTopAreaTap: onToggleControls,
                         onDidBeginPlayback: { hasBegunPlayback = true },
@@ -600,6 +769,7 @@ private struct DetailPage: View {
                             if playbackMode == .playOnce { haltPlayback() }
                         }
                     )
+                    .zIndex(1)
                     DetailMetadataView(
                         metadata: displayedMetadata,
                         displayNumber: displayNumber,
@@ -608,11 +778,10 @@ private struct DetailPage: View {
                         .padding(.top, 34)
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.top, -safeAreaTop)
             }
             .ignoresSafeArea(edges: .top)
             .scrollBounceBehavior(.basedOnSize)
-            .scrollDisabled(interactionLocked)
+            .scrollDisabled(interactionLocked || pinchActive.wrappedValue)
 
             if pagingEnabled {
                 LiveHoldCatcher(
@@ -628,7 +797,23 @@ private struct DetailPage: View {
                     onBadgeTap: { startPlayback(.playOnce) },
                     onTapLeft: onPrevious,
                     onTapRight: onNext,
-                    onTapCenter: onToggleControls
+                    onTapCenter: { if !pinchActive.wrappedValue { onToggleControls() } },
+                    pinchEnabled: isSelected && !interactionLocked,
+                    onPinchChange: { scale, anchor, translation in
+                        if !zoomTouchActive {
+                            zoomTouchActive = true
+                            zoomResetTask?.cancel()
+                            haltPlayback()
+                            pinchActive.wrappedValue = true
+                            zoomAnchor = UnitPoint(x: anchor.x, y: anchor.y)
+                        }
+                        let nextScale = min(max(scale, 1), 3)
+                        if nextScale > 1 || zoomScale > 1 {
+                            zoomOffset = translation
+                        }
+                        zoomScale = nextScale
+                    },
+                    onPinchEnd: resetZoom
                 )
                 .frame(width: screenSize.width)
                 .frame(maxHeight: .infinity)
@@ -638,7 +823,10 @@ private struct DetailPage: View {
         .coordinateSpace(name: "detailPage")
         .background(PunctumTheme.ink)
         .task(id: "\(photo.id)-\(isSelected)") {
-            guard pagingEnabled || isSelected else { return }
+            guard pagingEnabled && isSelected else { return }
+            do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+            guard !Task.isCancelled else { return }
+            loadLivePhoto()
             let loaded = await MetadataService.shared.metadata(for: photo)
             guard !Task.isCancelled else { return }
             metadata = loaded
@@ -647,22 +835,54 @@ private struct DetailPage: View {
                 metadata.location = location
             }
         }
-        .onAppear {
-            if pagingEnabled { loadLivePhoto() }
-        }
         .onChange(of: photo.id) { _, _ in
+            clearZoom()
             resetPlayback()
-            if pagingEnabled { loadLivePhoto() }
+        }
+        .onChange(of: isSelected) { _, selected in
+            if !selected {
+                clearZoom()
+                resetPlayback()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            clearZoom()
+            haltPlayback()
         }
         .onDisappear {
+            clearZoom()
             haltPlayback()
             liveLoadTask?.cancel()
             liveLoadTask = nil
         }
     }
 
+    private func resetZoom() {
+        zoomTouchActive = false
+        zoomResetTask?.cancel()
+        withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .interactiveSpring(response: 0.30, dampingFraction: 0.88)) {
+            zoomScale = 1
+            zoomOffset = .zero
+        }
+        zoomResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(reduceMotion ? 160 : 310))
+            guard !Task.isCancelled else { return }
+            pinchActive.wrappedValue = false
+            zoomResetTask = nil
+        }
+    }
+
+    private func clearZoom() {
+        if zoomTouchActive || zoomResetTask != nil { pinchActive.wrappedValue = false }
+        zoomResetTask?.cancel()
+        zoomResetTask = nil
+        zoomTouchActive = false
+        zoomScale = 1
+        zoomOffset = .zero
+    }
+
     private func startPlayback(_ mode: LivePlaybackMode) {
-        guard photo.isLivePhoto else { return }
+        guard photo.isLivePhoto, !pinchActive.wrappedValue else { return }
         playbackFallbackTask?.cancel()
         playbackFallbackTask = nil
         if mode == .hold {
@@ -710,6 +930,28 @@ private struct DetailPage: View {
     }
 }
 
+/// Photo bounds are independent of metadata layout and never begin above the viewport.
+struct DetailPhotoLayout {
+    let imageSize: CGSize
+    let topPadding: CGFloat
+
+    init(aspect: CGFloat, screenSize: CGSize, safeAreaTop: CGFloat) {
+        let aspect = max(aspect, 0.1)
+        let naturalHeight = screenSize.width / aspect
+        if aspect < 1 {
+            // Portraits start at the physical screen edge, without shifting content above it.
+            topPadding = 0
+            let availableHeight = max(screenSize.height - topPadding - 24, 1)
+            let height = min(naturalHeight, availableHeight)
+            imageSize = CGSize(width: height * aspect, height: height)
+        } else {
+            imageSize = CGSize(width: screenSize.width, height: naturalHeight)
+            // Keep the existing landscape position after removing the parent negative inset.
+            topPadding = max((screenSize.height - naturalHeight) * 0.5 - 40, 0)
+        }
+    }
+}
+
 private struct DetailPhotoFrame: View {
     let photo: PhotoItem
     let screenSize: CGSize
@@ -717,6 +959,9 @@ private struct DetailPhotoFrame: View {
     let livePhoto: PHLivePhoto?
     let playbackMode: LivePlaybackMode
     let hasBegunPlayback: Bool
+    var zoomScale: CGFloat = 1
+    var zoomAnchor: UnitPoint = .center
+    var zoomOffset: CGSize = .zero
     var onFrameChange: (CGRect) -> Void = { _ in }
     var onTopAreaTap: () -> Void = {}
     var onDidBeginPlayback: () -> Void = {}
@@ -728,11 +973,12 @@ private struct DetailPhotoFrame: View {
 
     var body: some View {
         let aspect = max(photo.hasKnownSize ? photo.aspectRatio : 1.5, 0.1)
-        let imageHeight = screenSize.width / aspect
-        let topPadding = aspect < 1 ? 0 : max((screenSize.height - imageHeight) * 0.5 - 40 + safeAreaTop, 0)
+        let layout = DetailPhotoLayout(aspect: aspect, screenSize: screenSize, safeAreaTop: safeAreaTop)
+        let imageHeight = layout.imageSize.height
+        let topPadding = layout.topPadding
 
         ZStack(alignment: .bottomTrailing) {
-            if photo.isLivePhoto {
+            if photo.isLivePhoto, livePhoto != nil {
                 LivePhotoHost(
                     livePhoto: livePhoto,
                     mode: playbackMode,
@@ -757,12 +1003,15 @@ private struct DetailPhotoFrame: View {
                     .accessibilityHidden(true)
             }
         }
-        .frame(width: screenSize.width, height: imageHeight)
+        .frame(width: layout.imageSize.width, height: imageHeight)
         .onGeometryChange(for: CGRect.self) { geo in
             geo.frame(in: .named("detailPage"))
         } action: { frame in
             onFrameChange(frame)
         }
+        .scaleEffect(zoomScale, anchor: zoomAnchor)
+        .offset(zoomOffset)
+        .frame(maxWidth: .infinity)
         .padding(.top, topPadding)
         .overlay(alignment: .top) {
             if topPadding > 0 {
@@ -834,5 +1083,15 @@ private extension Text {
         font(PunctumTheme.newsreader(14))
             .foregroundStyle(PunctumTheme.bone)
             .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+    }
+}
+
+
+private struct LegacyDeletionGesture<G: Gesture>: ViewModifier {
+    let enabled: Bool
+    let gesture: G
+    @ViewBuilder func body(content: Content) -> some View {
+        if enabled { content.simultaneousGesture(gesture) }
+        else { content }
     }
 }

@@ -1,0 +1,47 @@
+import Foundation
+import ImageIO
+import Photos
+
+// Local EXIF only: cloud-only originals keep their Photos date until available locally.
+// Cache invalidates when Photos modificationDate changes, including edited assets.
+@MainActor
+final class CaptureDateIndex {
+    static let shared = CaptureDateIndex()
+    struct Entry: Codable { let modification: Date?; let capture: Date }
+    private var entries: [String: Entry] = [:]
+    private let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("capture-dates-v1.json")
+    private init() {
+        if let data = try? Data(contentsOf: url), let saved = try? JSONDecoder().decode([String: Entry].self, from: data) { entries = saved }
+    }
+    func date(for asset: PHAsset) -> Date {
+        if let cached = entries[asset.localIdentifier], cached.modification == asset.modificationDate { return cached.capture }
+        return asset.creationDate ?? asset.modificationDate ?? .distantPast
+    }
+    func prepare(_ asset: PHAsset) async {
+        if let cached = entries[asset.localIdentifier], cached.modification == asset.modificationDate { return }
+        let input: PHContentEditingInput? = await withCheckedContinuation { continuation in
+            let options = PHContentEditingInputRequestOptions()
+            options.isNetworkAccessAllowed = false
+            // Request original input rather than an app-flattened adjustment rendition.
+            options.canHandleAdjustmentData = { _ in true }
+            asset.requestContentEditingInput(with: options) { input, _ in continuation.resume(returning: input) }
+        }
+        guard let imageURL = input?.fullSizeImageURL else { return }
+        let captured = await Task.detached(priority: .utility) {
+            guard let source = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
+                  let raw = exif[kCGImagePropertyExifDateTimeOriginal] as? String else { return Optional<Date>.none }
+            return Self.parse(raw, offset: exif[kCGImagePropertyExifOffsetTimeOriginal] as? String)
+        }.value
+        entries[asset.localIdentifier] = Entry(modification: asset.modificationDate, capture: captured ?? asset.creationDate ?? asset.modificationDate ?? .distantPast)
+    }
+    nonisolated static func parse(_ raw: String, offset: String?) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.isLenient = false
+        formatter.dateFormat = offset == nil ? "yyyy:MM:dd HH:mm:ss" : "yyyy:MM:dd HH:mm:ssXXX"
+        return formatter.date(from: raw + (offset ?? ""))
+    }
+    func save() { if let data = try? JSONEncoder().encode(entries) { try? data.write(to: url, options: .atomic) } }
+}

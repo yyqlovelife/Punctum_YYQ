@@ -12,6 +12,9 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published var showSwitcher = false
     @Published var showAlbumPicker = false
     @Published var detailIndex: Int?
+    @Published var detailVisible = false
+    @Published var galleryReadyID: String?
+    private var detailSession = UUID()
     @Published private(set) var detailInitialMetadata: PhotoMetadata?
     @Published var invitationStyle: InvitationCardStyle
     @Published var permissionMessage: String?
@@ -30,10 +33,12 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private var deleteTombstones = PhotoDeletionTombstones()
     private var hiddenAssetIDs: [String: Set<String>]
     private var refreshTask: Task<Void, Never>?
+    private var lastKnownAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     private var galleryLoadGeneration = 0
     private var galleryFetchNextIndex = 0
     private var galleryFetchExhausted = true
     private var isLoadingMorePhotos = false
+    private var deletionInFlight = false
 
     private static let deleteTombstoneDuration: TimeInterval = 120
     private static let galleryPageCount = 80
@@ -171,18 +176,25 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
     func selectGallery(_ id: String) {
         guard galleries.contains(where: { $0.id == id }) else { return }
+        library.unpinCaptureOrder()
         let switching = currentGalleryID != id
         currentGalleryID = id
         showSwitcher = false
+        galleryReadyID = nil
         detailIndex = nil
         if switching {
             photos = []
             isLoading = true
         }
+        // Navigation must never await EXIF enumeration or an iCloud image request.
+        // Freeze the current order for this gallery visit, including subsequent pages.
+        if let gallery = currentGallery { library.pinCaptureOrder(for: gallery) }
         loadCurrentGallery()
+        galleryReadyID = id
     }
 
     func openSwitcher() {
+        library.unpinCaptureOrder()
         detailIndex = nil
         showSwitcher = true
     }
@@ -231,39 +243,56 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
     func openDetail(at index: Int, metadata: PhotoMetadata) {
         guard photos.indices.contains(index) else { return }
+        if let gallery = currentGallery { library.pinCaptureOrder(for: gallery) }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             detailInitialMetadata = metadata
+            detailVisible = false
+            detailSession = UUID()
             detailIndex = index
         }
     }
 
     func closeDetail(pendingPhotos: [PhotoItem] = []) {
+        guard detailVisible else { return }
+        detailVisible = false
+        let session = detailSession
+        Task {
+            try? await Task.sleep(for: .milliseconds(140))
+            guard detailSession == session else { return }
+            finishClosingDetail(pendingPhotos: pendingPhotos)
+        }
+    }
+
+    func revealDetail() { detailVisible = true }
+
+    private func finishClosingDetail(pendingPhotos: [PhotoItem]) {
+        // Keep the gallery visit snapshot after returning from detail.
         detailIndex = nil
         detailInitialMetadata = nil
         guard !pendingPhotos.isEmpty else { return }
 
         var seen = Set<String>()
         let uniquePhotos = pendingPhotos.filter { seen.insert($0.id).inserted }
-        let pendingIDs = Set(uniquePhotos.map(\.id))
-        markDeleting(uniquePhotos)
         pendingDeletionRequest = PendingPhotoDeletion(photos: uniquePhotos)
-        photos.removeAll { pendingIDs.contains($0.id) }
-        updateCurrentOverview()
     }
 
     func cancelPendingDeletion(_ request: PendingPhotoDeletion) {
         pendingDeletionRequest = nil
-        clearTombstones(for: request.photos)
-        loadCurrentGallery()
     }
 
     func confirmPendingDeletion(_ request: PendingPhotoDeletion) {
+        deletionInFlight = true
         pendingDeletionRequest = nil
         Task {
             do {
+                defer { deletionInFlight = false }
                 try await library.delete(request.photos)
+                markDeleting(request.photos)
+                let ids = Set(request.photos.map(\.id))
+                var transaction = Transaction(); transaction.disablesAnimations = true
+                withTransaction(transaction) { photos.removeAll { ids.contains($0.id) } }
                 updateCurrentOverview()
             } catch {
                 clearTombstones(for: request.photos)
@@ -351,16 +380,30 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             galleries = valid
             persistGalleries()
         }
-        for gallery in galleries { refreshOverview(for: gallery) }
+        for gallery in galleries {
+            refreshOverview(for: gallery)
+            Task {
+                await library.prepareCaptureOrder(for: gallery)
+                guard galleries.contains(where: { $0.id == gallery.id }) else { return }
+                refreshOverview(for: gallery)
+                if currentGalleryID == gallery.id, galleryReadyID == gallery.id { loadCurrentGallery() }
+            }
+        }
         if currentGallery != nil { loadCurrentGallery() }
     }
 
     func appDidBecomeActive() {
-        refreshAll()
+        // Photos changes have their own observer. App-switcher inactive/active transitions
+        // must not rescan every gallery or rebuild covers on the main actor.
+        let status = library.authorizationStatus
+        guard status != lastKnownAuthorization else { return }
+        lastKnownAuthorization = status
+        scheduleRefresh()
     }
 
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
         Task { @MainActor [weak self] in
+            self?.library.invalidateCaptureOrder()
             self?.scheduleRefresh()
         }
     }
@@ -375,6 +418,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     private func loadCurrentGallery() {
+        guard detailIndex == nil, pendingDeletionRequest == nil, !deletionInFlight else { return }
         guard let gallery = currentGallery else {
             photos = []
             isLoading = false
@@ -405,7 +449,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
         imageCache.startCaching(
             Array(photos.prefix(16)),
-            targetSize: CGSize(width: 360, height: 360)
+            targetSize: CGSize(width: 900, height: 900)
         )
         refreshOverview(for: gallery)
         isLoading = false
@@ -441,7 +485,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             }
             imageCache.startCaching(
                 Array(appended.prefix(16)),
-                targetSize: CGSize(width: 360, height: 360)
+                targetSize: CGSize(width: 900, height: 900)
             )
         }
         isLoadingMorePhotos = false
@@ -510,8 +554,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             gallery: gallery,
             count: photos.count,
             timeSpan: PunctumFormatting.timeSpan(
-                oldest: photos.last?.creationDate,
-                newest: photos.first?.creationDate
+                oldest: photos.map { CaptureDateIndex.shared.date(for: $0.asset) }.min(),
+                newest: photos.map { CaptureDateIndex.shared.date(for: $0.asset) }.max()
             ),
             covers: Array(photos.prefix(4))
         )
@@ -617,6 +661,17 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         "镜头，比情话更擅长说永远",
         "观止，关心每一幅照片被重新看见的时刻",
         "每一次回望，都重新感受影像的重量",
+        "光落下的地方，故事开始显影",
+        "时间经过镜头，留下自己的形状",
+        "有些瞬间，只肯向镜头坦白",
+        "把今日的光，留给明日回望",
+        "取景，是与世界交换目光",
+        "看见之前，先学会凝望",
+        "一张照片，一次与时间的重逢",
+        "光穿过人间，也穿过你",
+        "留住一束光，也留住当时的自己",
+        "把平凡看久一点，奇迹就会显影",
+        "有些光，只在回望时抵达",
     ]
 }
 
