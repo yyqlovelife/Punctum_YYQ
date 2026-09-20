@@ -112,7 +112,13 @@ class GalleryStore(context: Context) {
         prefs.edit().putString(KEY_OVERVIEWS, root.toString()).apply()
     }
 
+    private val photoWrites = CoalescingCacheWriter<String, List<Photo>>(
+        write = ::writePhotoCache,
+        onFailure = { android.util.Log.e("GalleryStore", "Photo cache write failed", it) },
+    )
+
     fun loadPhotoCache(uriKey: String): List<Photo> {
+        photoWrites.latest(uriKey)?.let { return it }
         val root = try {
             JSONObject(prefs.getString(KEY_PHOTOS, null) ?: "{}")
         } catch (e: Exception) {
@@ -151,6 +157,11 @@ class GalleryStore(context: Context) {
     }
 
     fun savePhotoCache(uriKey: String, photos: List<Photo>) {
+        // Photo lists are immutable snapshots. Serialization runs on one background writer.
+        photoWrites.submit(uriKey, photos)
+    }
+
+    private fun writePhotoCache(uriKey: String, photos: List<Photo>) {
         val root = try {
             JSONObject(prefs.getString(KEY_PHOTOS, null) ?: "{}")
         } catch (e: Exception) {
@@ -193,13 +204,8 @@ class GalleryStore(context: Context) {
     }
 
     fun removePhotoCache(uriKey: String) {
-        val root = try {
-            JSONObject(prefs.getString(KEY_PHOTOS, null) ?: "{}")
-        } catch (e: Exception) {
-            JSONObject()
-        }
-        root.remove(uriKey)
-        prefs.edit().putString(KEY_PHOTOS, root.toString()).apply()
+        // Queue removal with saves so an older in-flight write cannot restore this album.
+        photoWrites.submit(uriKey, emptyList())
     }
 
     var lastGalleryUri: String?

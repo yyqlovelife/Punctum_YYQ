@@ -1,5 +1,6 @@
 package com.punctum.gallery
 
+import android.util.Log
 import android.app.Application
 import android.app.PendingIntent
 import androidx.compose.runtime.getValue
@@ -17,6 +18,9 @@ import com.punctum.gallery.model.Photo
 import com.punctum.gallery.model.SystemAlbum
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -32,6 +36,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     private val coverBuildJobs = mutableMapOf<String, Job>()
     private val photoRefreshJobs = mutableMapOf<String, Job>()
     private var overviewRefreshJob: Job? = null
+    private var galleryEntryJob: Job? = null
+    private var galleryEntryGeneration = 0
     private var dataRefreshJob: Job? = null
     private var foregroundSyncJob: Job? = null
     private var systemAlbumsJob: Job? = null
@@ -81,6 +87,24 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var selectedIndex by mutableStateOf<Int?>(null)
         private set
+
+    var galleryReturnPhotoID by mutableStateOf<String?>(null)
+        private set
+    var detailReturnPending by mutableStateOf(false)
+        private set
+    private var lastViewedPhotoID: String? = null
+    private var lastViewedPhotoIndex = 0
+
+    fun recordDetailPhoto(photo: Photo) {
+        val id = photo.uri.toString()
+        if (lastViewedPhotoID == id) return
+        lastViewedPhotoID = id
+        photos.indexOfFirst { it.uri == photo.uri }.takeIf { it >= 0 }?.let {
+            lastViewedPhotoIndex = it
+        }
+    }
+
+    fun clearGalleryReturnPosition() { galleryReturnPhotoID = null }
 
     val currentGallery: Gallery?
         get() = galleries.firstOrNull { it.uri.toString() == currentUri }
@@ -142,6 +166,10 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectGallery(uriKey: String) {
+        cancelGalleryEntryWork()
+        photoRefreshJobs.remove(uriKey)?.cancel()
+        detailReturnPending = false
+        galleryReturnPhotoID = null
         currentUri = uriKey
         store.lastGalleryUri = uriKey
         showSwitcher = false
@@ -150,9 +178,11 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshCurrentData() {
+        if (galleryEntryJob?.isActive == true) return
         dataRefreshJob?.cancel()
         dataRefreshJob = viewModelScope.launch {
             delay(250)
+            if (galleryEntryJob?.isActive == true) return@launch
             refreshOverviews(force = true)
             currentUri?.let { uriKey ->
                 refreshPhotos(uriKey, replaceVisible = false, cached = photoCache[uriKey].orEmpty())
@@ -223,26 +253,61 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         store.invitationStyleId = invitationStyle.id
     }
 
+    private fun cancelGalleryEntryWork() {
+        galleryEntryGeneration += 1
+        galleryEntryJob?.cancel()
+        galleryEntryJob = null
+        currentUri?.let { photoRefreshJobs.remove(it)?.cancel() }
+    }
+
+    fun cancelGalleryLoading() {
+        cancelGalleryEntryWork()
+        dataRefreshJob?.cancel()
+        photos = emptyList()
+        loadingPhotos = false
+        currentUri = null
+        selectedIndex = null
+        showSwitcher = false
+    }
+
     private fun loadPhotos(uriKey: String) {
-        photoCache[uriKey]?.let { cached ->
-            photos = cached
-            if (overviews[uriKey] == null) cacheOverview(uriKey, cached)
-            loadingPhotos = false
-            refreshPhotos(uriKey, replaceVisible = false, cached = cached)
-            return
-        }
-        val persisted = store.loadPhotoCache(uriKey)
-        if (persisted.isNotEmpty()) {
-            photoCache[uriKey] = persisted
-            photos = persisted
-            if (overviews[uriKey] == null) cacheOverview(uriKey, persisted)
-            loadingPhotos = false
-            refreshPhotos(uriKey, replaceVisible = false, cached = persisted)
-            return
-        }
+        val generation = galleryEntryGeneration
         loadingPhotos = true
         photos = emptyList()
-        refreshPhotos(uriKey, replaceVisible = true, cached = emptyList())
+        galleryEntryJob = viewModelScope.launch {
+            try {
+                val gallery = galleries.firstOrNull { it.uri.toString() == uriKey } ?: return@launch
+                val cached = photoCache[uriKey] ?: withContext(Dispatchers.IO) {
+                    store.loadPhotoCache(uriKey)
+                }
+                coroutineContext.ensureActive()
+                if (generation != galleryEntryGeneration || currentUri != uriKey) return@launch
+                // On first entry do a single full scan, avoiding a second EXIF pass
+                // solely to obtain four cover photos before the real list load.
+                val list = if (cached.isNotEmpty()) cached else {
+                    PhotoRepository.loadPhotos(getApplication(), gallery.uri)
+                }
+                val visible = visiblePhotosForGallery(uriKey, list)
+                coroutineContext.ensureActive()
+                if (generation != galleryEntryGeneration || currentUri != uriKey) return@launch
+                photoCache[uriKey] = visible
+                photos = visible
+                loadingPhotos = false
+                store.savePhotoCache(uriKey, visible)
+                cacheOverview(uriKey, visible)
+                if (cached.isNotEmpty()) refreshPhotos(uriKey, replaceVisible = false, cached = visible)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (generation == galleryEntryGeneration && currentUri == uriKey) {
+                    homeToast = "图集加载失败，请重试"
+                    currentUri = null
+                    photos = emptyList()
+                }
+            } finally {
+                if (generation == galleryEntryGeneration) loadingPhotos = false
+            }
+        }
     }
 
     private fun refreshPhotos(uriKey: String, replaceVisible: Boolean, cached: List<Photo> = photoCache[uriKey].orEmpty()) {
@@ -335,6 +400,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun goHome() {
+        detailReturnPending = false
+        galleryReturnPhotoID = null
         currentUri = null
         selectedIndex = null
         showSwitcher = false
@@ -385,6 +452,11 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         store.saveOverview(overview)
     }
 
+    fun pauseGalleryThumbnails() {
+        thumbnailWarmJobs.values.forEach { it.cancel() }
+        thumbnailWarmJobs.clear()
+    }
+
     fun warmGalleryThumbnails(firstPhotoIndex: Int, lastPhotoIndex: Int) {
         val uriKey = currentUri ?: return
         val list = photoCache[uriKey] ?: photos
@@ -395,18 +467,34 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         val window = list.subList(from, to + 1)
         thumbnailWarmJobs[uriKey]?.cancel()
         thumbnailWarmJobs[uriKey] = viewModelScope.launch {
-            val warmed = PhotoRepository.ensureThumbnails(getApplication(), uriKey, window)
-            val warmedByUri = warmed.associateBy { it.uri }
-            val current = photoCache[uriKey].orEmpty()
-            val updated = current.map { warmedByUri[it.uri] ?: it }
-            if (updated == current) return@launch
-            photoCache[uriKey] = updated
-            store.savePhotoCache(uriKey, updated)
-            if (currentUri == uriKey && !isVisiblePhotoListFrozen()) {
-                photos = applyMoveTombstones(uriKey, updated)
+            val logTag = "PunctumThumb"
+            val startedAt = android.os.SystemClock.uptimeMillis()
+            // Visible photos come first. Publish each completed image before warming the next.
+            for ((slot, photo) in window.withIndex()) {
+                val path = GalleryImageCache.ensureThumbnail(getApplication(), uriKey, photo.uri)
+                    ?: continue
+                val current = photoCache[uriKey] ?: return@launch
+                val updated = withContext(Dispatchers.Default) {
+                    val index = current.indexOfFirst { it.uri == photo.uri }
+                    if (index < 0 || current[index].thumbnailPath == path) null
+                    else current.toMutableList().apply {
+                        this[index] = current[index].copy(thumbnailPath = path)
+                    }.toList()
+                } ?: continue
+                // Never restore a stale list after a concurrent deletion, refresh or removal.
+                if (photoCache[uriKey] !== current) continue
+                photoCache[uriKey] = updated
+                store.savePhotoCache(uriKey, updated)
+                if (currentUri == uriKey && !isVisiblePhotoListFrozen()) {
+                    photos = applyMoveTombstones(uriKey, updated)
+                }
+                if (Log.isLoggable(logTag, Log.DEBUG)) {
+                    Log.d(logTag, "hq-ready slot=$slot elapsedMs=${android.os.SystemClock.uptimeMillis() - startedAt}")
+                }
             }
+            val latest = photoCache[uriKey] ?: return@launch
             withContext(Dispatchers.IO) {
-                com.punctum.gallery.data.GalleryImageCache.trimGalleryThumbnails(getApplication(), uriKey, updated)
+                GalleryImageCache.trimGalleryThumbnails(getApplication(), uriKey, latest)
             }
         }
     }
@@ -741,15 +829,30 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openDetail(index: Int) {
         queuedDetailDeletePhotos.clear()
+        galleryReturnPhotoID = null
+        detailReturnPending = false
+        photos.getOrNull(index)?.let(::recordDetailPhoto)
         selectedIndex = index
     }
 
     fun closeDetail() {
+        if (detailReturnPending) return
+        val pending = queuedDetailDeletePhotos.distinctBy { it.uri }
+        galleryReturnPhotoID = galleryReturnPhoto(
+            photos.map { it.uri.toString() }, lastViewedPhotoID, lastViewedPhotoIndex,
+            pending.map { it.uri.toString() }.toSet(),
+        )
+        detailReturnPending = true
+        if (galleryReturnPhotoID == null) finishDetailReturn()
+    }
+
+    fun finishDetailReturn() {
+        if (!detailReturnPending) return
+        detailReturnPending = false
         selectedIndex = null
         val pending = queuedDetailDeletePhotos.distinctBy { it.uri }
         queuedDetailDeletePhotos.clear()
-        if (pending.isEmpty()) return
-        pendingDetailDeleteConfirmation = pending
+        if (pending.isNotEmpty()) pendingDetailDeleteConfirmation = pending
     }
 
     fun clearMoveError() { moveError = null }

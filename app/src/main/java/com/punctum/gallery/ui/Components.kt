@@ -1,5 +1,7 @@
 package com.punctum.gallery.ui
 
+import android.util.Log
+
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -230,6 +232,7 @@ internal fun PunctumImage(
     animateOnLoad: Boolean = true,
     onSuccess: () -> Unit = {},
     onError: () -> Unit = {},
+    onImageSize: (Int, Int) -> Unit = { _, _ -> },
 ) {
     var loaded by remember(model, animateOnLoad) { mutableStateOf(!animateOnLoad) }
     val alpha by animateFloatAsState(
@@ -246,7 +249,14 @@ internal fun PunctumImage(
         model = model,
         contentDescription = contentDescription,
         contentScale = contentScale,
-        onSuccess = {
+        onSuccess = { state ->
+            val cacheKey = (model as? coil.request.ImageRequest)?.memoryCacheKey?.key.orEmpty()
+            if (cacheKey.startsWith("gallery-") && cacheKey.contains("thumb-fit-v") &&
+                Log.isLoggable(THUMBNAIL_LOG_TAG, Log.DEBUG)) {
+                Log.d(THUMBNAIL_LOG_TAG,
+                    "decoded=${state.result.drawable.intrinsicWidth}x${state.result.drawable.intrinsicHeight} source=${state.result.dataSource}")
+            }
+            onImageSize(state.result.drawable.intrinsicWidth, state.result.drawable.intrinsicHeight)
             loaded = true
             onSuccess()
         },
@@ -308,3 +318,5 @@ internal fun MoveToAlbumIcon(
         drawPath(head, color = tint, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
+
+private const val THUMBNAIL_LOG_TAG = "PunctumThumb"

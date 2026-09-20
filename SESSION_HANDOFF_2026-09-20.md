@@ -1,4 +1,4 @@
-# Punctum 开发交接
+# 观止新对话接续 · 2026-09-20
 
 ## 当前发布与接续 · 2026-09-20
 
@@ -120,154 +120,83 @@ iOS 0.5.9安装包SHA256：`a55562270301e7b8e61acd10890c7a072667d1510ad63a9b1f39
 - 未提交、推送或升版本；已有iOS及Android未提交工作保留。
 
 
-## 当前接续状态 · 2026-09-20
+## 先读这里
 
-新对话先读 [本轮交接](SESSION_HANDOFF_2026-09-20.md)。两端仍为0.5.8/58，本轮增量未提交上传。
+- 真实源码：`/Users/80400763/Documents/Punctum`。聊天目录 `/Users/80400763/Documents/ChatGPT/Punctum-OPPO` 仅放交接副本，不要在旧副本里开发。
+- 直接在仓库工作，禁止使用 L3 Workflow。保留当前全部未提交修改和新增文件。
+- 两端版本均为 **0.5.8 / 58**；当前 HEAD 为 `4fea135`。本轮增量尚未提交、推送或发布，不要把旧远端版本当成包含本轮修改。
+- 最新用户请求是更新文档后换新对话。没有新功能待实现；优先接收最新安卓闪动修复的真机反馈。
+- 本文为当前状态入口；其他文档的旧日期章节保留历史，旧章节中的“最新包”“Android 未改”等仅适用于当次记录。
 
-- Android最新包：`APK/Punctum-0.5.8-return-flash-fix.apk`，已覆盖安装PMX110。用户确认返回定位逻辑正确；随后的一帧闪动已调整显示顺序，尚待用户复测。6项位置回归通过。
-- iOS最新包：`iOS/IPA/Punctum-0.5.8-pagination-fix-unsigned.ipa`，含保留缩放、对比模式、批删卡顿和连续翻页修复；41项回归通过，剩余真机验收见交接。
-- 构建证据归档：`docs/verification/2026-09-20/`。以下旧日期章节保留历史，其“最新包”和验收结论以当时范围为准。
+## 最新交付
 
+| 平台 | 最新包（相对真实仓库） | 验证与安装 |
+|---|---|---|
+| Android | `APK/Punctum-0.5.8-return-flash-fix.apk` | 6项JVM位置测试通过，Release及签名验证通过；9月19日已通过 `adb install -r` 成功覆盖安装到 PMX110，保留数据 |
+| iOS | `iOS/IPA/Punctum-0.5.8-pagination-fix-unsigned.ipa` | 41项XCTest通过，Release、ZIP和版本检查通过；沿用用户现有AltStore身份签名覆盖安装，最新包真机验收未确认 |
 
-## Android return flash follow-up - 2026-09-19
+9月20日重新核对文件SHA256：
+- Android：`04b25fddbc3d521fbd67200dcab0ff34b0317924f5d112e66f487b028d4d36da`
+- iOS：`e53c5526ab35a61ded34805c0f06c395f22eb685342d3e54ab97e9cd11d71404`
 
-6 position tests and Release passed; APK signature verified. Package: `APK/Punctum-0.5.8-return-flash-fix.apk`; SHA256 `04b25fddbc3d521fbd67200dcab0ff34b0317924f5d112e66f487b028d4d36da`. Log: `/tmp/punctum-android-return-flash.log`.
+旧的comparison、batch-delete-fix、detail-return-fix包保留为历史产物，继续试用应取上表最新包。本次只整理文档，没有重新构建或安装。
 
-The first return-position patch dismissed detail before the LaunchedEffect scrolled the gallery, allowing the old list position to appear for a frame. Close is now a two-phase handoff: resolve the photo anchor and retain detail, scroll the underlying list, await a frame, then dismiss detail and present any delete confirmation. Repeated back requests are coalesced; empty destinations finish immediately. Existing row-by-URI restoration and user-drag cancellation remain unchanged.
+## Android：返回位置及一帧闪动
 
-This addresses the observed ordering defect. Frame-level physical-device visual acceptance remains pending; JVM position tests do not establish absence of a flash.
+1. 用户规则：普通浏览和删除后，退出大图都要回到最后查看照片对应的列表位置。
+2. 已实现按照片URI记录当前位置，按双列照片行加顶部header偏移定位。确认删除、取消及失败恢复导致行号变化时，仍按同一URI重算。当前照片删除时用下一张，末张用上一张，空图集不保留锚点。
+3. 用户已明确确认“这个逻辑是实现了”，随后报告返回瞬间闪一帧；这是定位规则的用户确认，不代表所有删除分支均单独实测通过。
+4. 最新修复把返回分为两步：保留大图遮挡→底层列表scrollToItem→等待一帧→finishDetailReturn关闭大图并弹待删除确认。旧实现提前把selectedIndex置空，可能先露出旧列表位置。
+5. 用户主动拖动列表后清除定位锚点，避免反复拉回；重复返回请求合并，换图集和重新进入大图时清理旧请求。
+6. 最新闪动包安装成功，但尚未收到“闪动消失”的用户反馈。不能把6项位置单测说成帧级动效验收。
 
+代码入口：
+- `app/src/main/java/com/punctum/gallery/GalleryReturnPosition.kt`：照片身份、回退及行号计算。
+- `GalleryViewModel.kt`：recordDetailPhoto、closeDetail、detailReturnPending、finishDetailReturn。
+- `MainActivity.kt`：底层列表定位与关闭顺序、手动拖动取消锚点。
+- `ui/DetailScreen.kt`：SideEffect同步已显示照片；用户原有翻页/删除手势保留。
+- `app/src/test/java/com/punctum/gallery/GalleryReturnPositionTest.kt`：6项回归。JUnit依赖已加入app/build.gradle.kts。
 
-## Android detail return position - 2026-09-19
+接下来首先让用户测试：普通右翻后返回、边看边删后返回、确认/取消删除、末张删除；观察旧位置闪现和缩略图短暂空白。如仍闪，先区分列表布局跳变、图片加载和状态栏恢复，避免盲目延长动画。
 
-6 JVM tests passed, Release built, APK signature verified. Package: `APK/Punctum-0.5.8-detail-return-fix.apk`; SHA256 `06696feb6af1174eb5348c3a891e73edfcc5a2d0104de73aba009dc84d38bc51`. Build log: `/tmp/punctum-android-return-position-final.log`.
+## iOS：本轮累计变更
 
-Returning from detail now anchors the gallery to the last viewed photo URI instead of retaining the original list position. Detail reports the displayed photo after composition; close resolves an undeleted successor or predecessor if needed. The gallery scrolls directly to that photo's two-photo row (including the header offset). Pending delete confirmation, removal, cancellation and restoration recalculate the row by URI. Manual list dragging clears the anchor; opening detail or switching galleries clears the previous return request.
+- 大图1–5倍保留缩放，松手保留，单/双指平移，双击放大区域或捏回1倍复原。
+- 对比模式：系统单选照片；两竖图左右排，其余上下排；独立/联动缩放平移；确认删除和对应返回；统一下沉反馈。详见COMPARISON_HANDOFF.md。
+- 批量删除后列表卡顿：合并刷新，概览分批让出主线程，排序和索引写盘后台执行，首页封面延后生成，取消列表出现时批量预读原图元数据。用户报告过卡死/黑屏，未取得该手机诊断日志，黑屏根因和修复效果未完成真机验收。
+- 连续翻页接续：旧判断混用了visiblePhotos索引和未过滤的photos.count；80张标删4张就可能达不到续载门槛。现用DetailPagination统一检查初入、翻页、删除、追加及手势完成，空批次继续加载，耗尽才退出。
+- 41项测试包含6项分页策略回归，覆盖300张跨批模拟；不能宣称真机已连续滑动300张。
 
-Regression scope: ordinary browsing, earlier photos removed/restored, deleting the current/last photo, empty albums, and header/two-column row offsets. PMX110 connected near the end of the run; `adb install -r` completed successfully, preserving app data. Physical navigation and deletion flows still need verification. iOS unchanged by this task. Version remains 0.5.8 / 58; no commit or upload.
+关键文件（相对 `iOS/Punctum/Punctum`）：Models/PhotoZoomState.swift、ComparisonState.swift、DetailPagination.swift；Views/DetailScreen.swift、ComparisonScreen.swift、ComparisonImagePane.swift、ComparisonPhotoPicker.swift、LivePhotoViews.swift；ViewModels/GalleryViewModel.swift；Services/PhotoLibraryService.swift、CaptureDateIndex.swift。
 
+对比模式已观察：系统选图、混合布局、独立/联动点击放大、双击复原、应用/系统取消、删新选合成测试图返回原图。仍待：最终图标显示、两竖图/两横图实屏布局、删原图/末张/唯一图、受限照片权限、云端失败重试、真机多指手感。Mac此前自动锁屏中断过界面检查；不要反复重做已完成部分。
 
-## Detail pagination fix - 2026-09-18
+保护已确认的iOS原生280ms删除动效、列表稳定与照片原比例。对比模式目前只实现iOS，Android没有移植本轮对比功能。
 
-Latest IPA: `iOS/IPA/Punctum-0.5.8-pagination-fix-unsigned.ipa`. SHA256: `e53c5526ab35a61ded34805c0f06c395f22eb685342d3e54ab97e9cd11d71404`. Release and ZIP/version checks passed. Logs: `/tmp/punctum-pagination-final-tests.log`, `/tmp/punctum-pagination-release.log`. Physical-device continuous browsing remains to be verified.
+## 验证和接续命令
 
-The old trigger compared an index into visiblePhotos with photos.count, which still included pending deletions. With 80 loaded and 4 removed, the maximum visible index was 75 while the trigger required 76. Checking only index changes also missed entry at the final loaded photo and deletions that kept the same index.
-
-DetailPagination now keys the loading task on selection, visible/loaded counts, exhaustion and gesture completion. It checks on entry and after removals/appends, uses the visible boundary, cancels superseded checks, and retains the existing model loading guard. Empty visible batches refill until exhaustion; deletion state is cleared if the old pager has been removed. Published exhaustion allows an empty final batch to close correctly. Existing ID-based selection preservation remains.
-
-Six strategy tests cover 300 photos across four batches, direct entry at the last photo, 4/20/50/79 pending deletions, unchanged-index deletion, empty batches and gesture completion. All 41 XCTest cases passed; this is model validation, not a claim of 300 physical swipe gestures on an iPhone. Includes comparison mode and the preceding batch-delete performance fix; version stays 0.5.8/58. Android unchanged; no commit or upload.
-
-
-## 批量删除卡顿修复 · 2026-09-18
-
-验证：35项XCTest全部通过（`/tmp/punctum-batch-delete-final-tests.log`），Release通过（`/tmp/punctum-batch-delete-release.log`）；IPA完整性与0.5.8/58核对通过。最新包 `iOS/IPA/Punctum-0.5.8-batch-delete-fix-unsigned.ipa`，SHA256 `63d5f706e2bb20ad7e9846a136dd0dd2f2cf2e0ba46490658e3d0b92c4c79fbb`。真机批量删除滚动性能待复测，未声称黑屏问题已完成真机验收。
-
-用户在真机批量标记数十张、返回列表确认删除后卡死，继续滚动可能黑屏。源码发现：删除通知触发全图集刷新；概览扫描、排序与索引写盘占用主线程；行重排会批量请求原图元数据。未取得该手机的卡死/内存终止日志，因此不把黑屏归因写成已证实。
-
-本轮修改：删除期间合并刷新并暂停追加分页，防重复提交；过期刷新结果丢弃；概览分批让出主线程且旧任务可取消；排序和索引写盘移到后台，写盘串行保持新旧顺序；列表期间不生成首页封面；移除列表单元格出现时的原图元数据预读，保留点击读取。原生280ms删除、对比模式、版本0.5.8/58不变。
-
-需真机复测：同一图集标记30–50张，确认删除后连续上下滚动；系统取消后照片仍在；删除后继续分页；回首页封面更新。未用用户照片做删除测试。
-
-
-更新：2026-09-18。本轮在 9 月 16 日的 0.5.8 上传快照基础上实现 iOS 保留式缩放；当前增量尚未提交或上传。历史试验与构建记录保留在 [design-qa.md](design-qa.md)，分平台变化见 [Android](changelog/android.md) / [iOS](changelog/ios.md)。
-
-## 对比模式接续 · 2026-09-18
-
-iOS 对比模式已实现，35项回归及Release通过；最新包 `iOS/IPA/Punctum-0.5.8-comparison-unsigned.ipa`。系统单图选择、双图布局、独立/联动1–5倍缩放、删除确认与返回逻辑均已接入。已验证系统选图、混合布局、点击缩放联动、双击复原及删新选合成测试图返回；Mac再次锁屏，入口图标最终修复、删原图、多指与受限权限仍待复核。详见 [COMPARISON_HANDOFF.md](COMPARISON_HANDOFF.md)。本轮不升号、不提交上传。
-
-## 当前结论
-
-- Android、iOS 均保持 **0.5.8 / 58**。本轮只改 iOS，大图支持 1–5 倍保留式缩放、单指/双指拖动与双击复原。
-- Android 照片双指放大、放大后双指平移和松手回弹已获用户真机确认。
-- iOS 原生快照删除已获用户确认“确实流畅了很多”；由 400ms 调至 **280ms** 后，用户确认“可以了这个状态”。当前保留 280ms。
-- 9 月 16 日 GitHub 上传已经完成；9 月 17 日增量尚未提交。后续没有明确要求时，不擅自提交或上传。
-- 所有 Punctum 工作直接在真实仓库进行，永远不启用 L3 Workflow。保留既有功能、回退开关和用户改动。
-- “按文件修改时间排序”切换已回退，不在当前版本中。
-
-## 接续与同步范围
-
-GitHub：<https://github.com/yyqlovelife/Punctum_YYQ>，接续开发使用远端 `main`。
-
-9 月 16 日同步以 Android 0.5.7 基线为起点，核对全部未提交源码、新增测试和 9 月 15–16 日验证记录，收录 Android 照片手势、iOS 能力对齐及其后反馈修复。上传前本地 `3b714ba` 与远端 `b1d0ba5` 文件树相同，SHA 差异来自此前 API 同步；不能将它们误判为产品功能分叉。当前提交身份以包含本文件的 Git 历史和远端分支为准，不在文件内硬写自身 SHA。
-
-原机器真实仓库为 `/Users/80400763/Documents/Punctum`；聊天目录只存交接副本，不能作为源码仓库。在其他电脑直接克隆完整仓库，签名和本机环境单独配置。
-
-## Android 当前状态
-
-- `app/build.gradle.kts`：`versionName=0.5.8`、`versionCode=58`。
-- `ui/DetailScreen.kt`：照片区域 1–3 倍双指缩放、二维平移，参数黑区不动；松手位置和大小一起 spring 复原。缩放与平移同时进行时保持指下内容连续，回弹可被下一次捏合打断。
-- `PHOTO_PINCH_ENABLED = true` 为回退开关；只在正常当前大图页启用，删除卡片和移动过渡不启用。双指期间暂停分页、详情滚动、实况及单指删除。
-- 原横图居中、竖图贴顶、边缘瞬切、实况播放、上滑删除参数保持既有实现；不要随 iOS 调整顺手修改 Android。
-- 0.5.7 已包含首页样式过渡、约 180ms 大图 fade-through、排序 placement spring（0.82 / 700）；既有 LEGACY / SUBTLE / EMPHASIZED 开关保留。
-- 首页进图集黑屏修复有构建/安装记录，用户未单独明确确认的体验不补写为验收通过。
-
-Android 源码入口相对于 `app/src/main/java/com/punctum/gallery/`。
-
-## iOS 当前状态
-
-项目入口 `iOS/Punctum/`，版本在 `project.yml` 和生成的 Xcode 工程中均为 0.5.8 / 58。源码入口相对于 `iOS/Punctum/Punctum/`。
-
-### 删除与大图手势
-
-- `Views/NativeDeletionPager.swift`：UIKit 单指上滑只移动当前分页的一张不可交互快照；原分页保留层级、暂时隐藏渲染，避免逐帧重建照片、EXIF 或分页树。
-- 参照 Android：140pt 行程，0.72 门槛；超程阻力 0.14，最大进度 1.12；上移 132–150pt，缩放至 0.92–0.91。松手以 **280ms** 收缩到垃圾桶，位移 quadratic、形变 smoothstep；取消 300ms 回弹，减少动态效果使用 160ms 淡出。
-- 完成回调后更新照片，再布局、恢复分页。失活时取消未提交拖动；已确认松手的删除只完成一次。释放被暂停的滚动手势。
-- `Views/DetailScreen.swift`：`nativeDeletionEnabled = true`。改为 false 可对照保留的 SwiftUI 路径；旧路径 400ms 不代表当前默认时长。
-- 删除只加入本次待删除集合，退出大图统一确认；取消保留图集列表，系统删除成功后才更新列表。不要为调动画改变删除语义。
-- 照片双指缩放 1–5 倍，结束后保留大小和位置；单指或双指支持四向拖动，后续捏合从当前倍率继续。双击放大图片的任意可见位置，或捏合缩回 1 倍，恢复原始大小和位置。黑色参数区不动。
-- `Models/PhotoZoomState.swift` 管理增量缩放、焦点保持、平移边界及变换后热区；`LiveHoldCatcher` 管理识别器和锁。放大状态与翻页、删除、Live Photo 互斥；仅手指松开不解锁，复原、离开照片或失活时清理。双击使用原有 0.30/0.88 弹簧，减少动态效果时直接复原。
-
-### 浏览与 EXIF
-
-- 每张照片对应固定 `DetailPage` 和稳定 tag；禁止恢复导致翻页回弹的动态占位分页方案。
-- 竖图顶边为零，不加安全区留白，不加负顶部偏移；超长竖图等比适配，横图位置保留。
-- `PhotoImageLoader.swift`：合并高清请求，ImageIO 串行后台解码，取消及过期回调按请求身份隔离。
-- `MetadataService.swift`：优先通过原始文件 URL 读取属性，无 URL 时回退 Data；相邻参数按张发布，预读任务按照片 ID 触发，连续删除不依赖页码变化。云端原图仍可能等待。
-- `CaptureDateIndex.swift` / `PhotoLibraryService.swift`：本地 EXIF 时间缓存，数据代复用，一次图集浏览固定排序快照；进入图集不等待整库索引或高清图，先展示首批 80 张。缩略图按屏幕请求 360–900px。
-
-### 首页、面板和生命周期
-
-- 原生 `SortGalleriesSheet` 支持长按、跨页自动滚动和顺序持久化；面板优先滚动内容，列表使用剩余高度。旧箭头组件保留。
-- 已添加图集锁定；排序 Sheet 关闭后再打开添加 Sheet。三类面板统一暖深灰、圆角和描边。
-- 首页三态过渡、顶部标签、28 条名言与 Android 对齐。卡片窗口坐标移动超过 10pt 后取消点击；滚动/减速中不触发进入图集。
-- 仅照片权限变化时在前台恢复补刷新，其余照片变化由 PhotoKit 监听；失活时清理按钮按压、实况长按和缩放，恢复暂停的翻页识别。
-
-## 验证与验收边界
-
-- 9 月 17 日最终 28 项测试、0 失败（含 7 项新增缩放回归），Release、IPA 完整性与版本检查通过；模拟器确认原尺寸布局和边缘切图。多指真机手感仍待复测，详细记录见 `design-qa.md` 最新节。
-
-- Android 0.5.8 Release/Lint 已通过，之前已覆盖安装到 OPPO PMX110 并核验版本启动；本次同步另做 Release/Lint 检查，不重复改动 Android 交互。
-- iOS 原生删除版本最近一轮 **21 项测试、0 失败**；最终 280ms 仅改时长，Release 和安装包完整性通过，用户随后真机确认该节奏。
-- 自动测试覆盖模型、EXIF 日期、解码、布局、点击移动判定、删除轨迹；不能代替帧率、多指或所有组合手势验证。
-- 模拟器曾启动失败，恢复后本轮自动 drag 诊断仅收到点击（无 touchesMoved，dy=0）。因此本轮模拟器记录不证明删除拖动或取消动作通过；原生删除体验的确认来自用户真机反馈。
-- 邀请卡、后台恢复、长列表、大库 EXIF 以及组合手势仍按各自证据保留复测边界，用户本次认可删除节奏不等于全部场景验收。
-
-## 构建与安装包
-
-Android（仓库根目录）：
-
-```bash
-JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew :app:assembleRelease :app:lintRelease
+Android（真实仓库根目录）：
+```sh
+JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew testDebugUnitTest assembleRelease
+/Users/80400763/Library/Android/sdk/platform-tools/adb devices
 ```
-
-产物 `app/build/outputs/apk/release/app-release.apk`，本地验收留档 `APK/Punctum-0.5.8-release.apk`。包名 `com.punctum.gallery`。换手机时先查连接设备，优先覆盖安装，核验版本和启动；不默认卸载或清数据。
+设备上次为PMX110 / `3B167100EXP00000`，新会话必须重新查连接，不能假定一直在线。使用覆盖安装，不卸载清数据。
 
 iOS：
-
-```bash
+```sh
 xcodegen generate --spec iOS/Punctum/project.yml
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project iOS/Punctum/Punctum.xcodeproj -scheme Punctum -configuration Debug -destination 'platform=iOS Simulator,id=FAE0B8A7-B631-4AEA-AE84-133224A0A1E2' -derivedDataPath /tmp/punctum-compare-derived CODE_SIGNING_ALLOWED=NO test
 iOS/Punctum/scripts/build-unsigned-ipa.sh
 ```
+模拟器ID须先确认仍存在。同一DerivedData不要并发构建。脚本产出通用unsigned包，交付时复制到明确命名的任务包。
 
-详见 [iOS README](iOS/Punctum/README.md)。最低 iOS 17，基础 Bundle ID `com.chessyyq.punctum`。固定 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`，同一个 DerivedData 不同时运行多个构建。
+构建证据已复制到 `docs/verification/2026-09-20/`：安卓最终构建日志及6项JUnit结果、iOS最终41项测试及Release日志。原始/tmp路径可能被清理，以仓库内归档为接续依据。
 
-- 当前缩放试用包：`iOS/IPA/Punctum-0.5.8-persistent-zoom-unsigned.ipa`；验证结果见 `design-qa.md` 最新节。
-- 已验收删除版本留档：`iOS/IPA/Punctum-0.5.8-native-delete-280ms-unsigned.ipa`，不包含本次保留式缩放。
-- SHA256：`d0f3d143d550f7bef6a92fe18b26fe04029a8880b6752f53092f31c3e58d12e8`。
-- 通用脚本生成 `iOS/IPA/Punctum-0.5.8-unsigned.ipa`；重新构建同一源码时内容以当前源码为准，打包时间不同可导致哈希不同。
-- 用户使用 AltStore / AltServer 自行签名侧载，沿用原账号和应用身份覆盖安装。未签名包不代表已直接装到真机。
-- APK、IPA、签名密钥、证书、profile、密码、local.properties 和构建缓存不上传 GitHub。
+## 文档索引
 
-## 后续维护
-
-动效实施用 `animate`，完成后用 `review-animations` 复核。更新文档覆盖上次交接以来全部差异；当前默认方案写入版本节，过期方案明确标为历史。上传必须核对远端分支和文件树，不能只看本地 commit 或 push 文本。
+- PUNCTUM_HANDOFF.md：总体交接及历史变更。
+- COMPARISON_HANDOFF.md：iOS对比实现与未验收项。
+- CHANGELOG.md、changelog/android.md、changelog/ios.md：总日志与分平台日志。
+- design-qa.md：已验证范围及历史试验。
+- README.md、iOS/Punctum/README.md：说明入口。
+- PRD/PRD-Punctum观止.md：产品规则；实现和验收状态以本交接为准。

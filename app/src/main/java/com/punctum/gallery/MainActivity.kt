@@ -1,6 +1,9 @@
 package com.punctum.gallery
 
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+
 import android.animation.ValueAnimator
+import androidx.compose.foundation.gestures.scrollBy
 import android.os.Bundle
 import android.Manifest
 import android.os.Build
@@ -30,6 +33,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -358,6 +364,28 @@ private fun PunctumApp(vm: GalleryViewModel) {
             ) {
                 key(currentKey) {
                     val listState = rememberLazyListState()
+                    var detailEntryVisibleIDs by remember { mutableStateOf(emptySet<String>()) }
+                    val listDragged by listState.interactionSource.collectIsDraggedAsState()
+                    val returnRow = galleryReturnRow(
+                        vm.photos.map { it.uri.toString() }, vm.galleryReturnPhotoID,
+                    )
+                    LaunchedEffect(listDragged) {
+                        if (listDragged && vm.selectedIndex == null) vm.clearGalleryReturnPosition()
+                    }
+                    LaunchedEffect(returnRow, vm.detailReturnPending, vm.selectedIndex, vm.loadingPhotos) {
+                        if (vm.loadingPhotos) return@LaunchedEffect
+                        if (vm.detailReturnPending) {
+                            // Keep detail fully visible until the destination has been laid out.
+                            if (returnRow != null && shouldCenterGalleryReturn(vm.galleryReturnPhotoID, detailEntryVisibleIDs)) {
+                                listState.centerGalleryReturnRow(returnRow)
+                            }
+                            androidx.compose.runtime.withFrameNanos { }
+                            vm.finishDetailReturn()
+                        } else if (vm.selectedIndex == null && returnRow != null &&
+                            shouldCenterGalleryReturn(vm.galleryReturnPhotoID, detailEntryVisibleIDs)) {
+                            listState.centerGalleryReturnRow(returnRow)
+                        }
+                    }
                     GalleryScreen(
                         gallery = current,
                         photos = vm.photos,
@@ -366,9 +394,23 @@ private fun PunctumApp(vm: GalleryViewModel) {
                         listState = listState,
                         onOpenSwitcher = ::requestHome,
                         onRename = { renameTarget = it },
-                        onSelectPhoto = vm::openDetail,
+                        onSelectPhoto = { index ->
+                            // Capture photo identities, including partly visible rows, before opening detail.
+                            val layout = listState.layoutInfo
+                            detailEntryVisibleIDs = layout.visibleItemsInfo
+                                .filter { it.offset < layout.viewportEndOffset &&
+                                    it.offset + it.size > layout.viewportStartOffset }
+                                .flatMap { item ->
+                                    val start = (item.index - 1) * 2
+                                    if (start < 0) emptyList() else (start..start + 1).mapNotNull {
+                                        vm.photos.getOrNull(it)?.uri?.toString()
+                                    }
+                                }.toSet()
+                            vm.openDetail(index)
+                        },
                         onDeletePhoto = vm::deletePhoto,
                         onWarmThumbnails = vm::warmGalleryThumbnails,
+                        onPauseThumbnails = vm::pauseGalleryThumbnails,
                         onContentReady = {
                             if (vm.currentUri == currentKey) readyGalleryKey = currentKey
                         },
@@ -419,6 +461,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
                 moveError = vm.moveError,
                 onDelete = vm::queueDetailDeletion,
                 onClose = vm::closeDetail,
+                onPhotoViewed = vm::recordDetailPhoto,
                 onWarmImages = vm::warmDetailImages,
                 onRequestSystemAlbums = vm::loadSystemAlbums,
                 onMovePhoto = vm::movePhoto,
@@ -457,8 +500,50 @@ private fun PunctumApp(vm: GalleryViewModel) {
         }
     }
 
+    val galleryLoading = currentKey != null && (vm.loadingPhotos || readyGalleryKey != currentKey)
+    var showGalleryLoading by remember(currentKey, galleryLoading) { mutableStateOf(false) }
+    LaunchedEffect(currentKey, galleryLoading) {
+        if (galleryLoading) {
+            delay(500)
+            showGalleryLoading = true
+        }
+    }
+    if (galleryLoading && showGalleryLoading) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = vm::cancelGalleryLoading,
+            properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
+        ) {
+            androidx.compose.material3.Surface(
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+                color = Surface1,
+                modifier = Modifier.width(272.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Spacer(Modifier.height(4.dp))
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(28.dp), color = Gold, strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Text(
+                        "项目数量较多，加载中",
+                        color = Bone, fontSize = 14.sp, lineHeight = 21.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = vm::cancelGalleryLoading) {
+                        Text("取消", color = Muted, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+    }
+
     BackHandler(enabled = vm.selectedIndex != null || vm.showSwitcher || vm.currentGallery != null) {
         when {
+            galleryLoading -> vm.cancelGalleryLoading()
             vm.selectedIndex != null -> vm.closeDetail()
             vm.showSwitcher -> vm.closeSwitcher()
             vm.currentGallery != null -> requestHome()
@@ -556,4 +641,17 @@ private fun RenameDialog(
         },
         containerColor = Surface1,
     )
+}
+
+/** Resolve the row's actual height before dismissing detail; preserve normal list bounds. */
+private suspend fun androidx.compose.foundation.lazy.LazyListState.centerGalleryReturnRow(row: Int) {
+    if (layoutInfo.visibleItemsInfo.none { it.index == row }) {
+        scrollToItem(row)
+        androidx.compose.runtime.withFrameNanos { }
+    }
+    val layout = layoutInfo
+    val item = layout.visibleItemsInfo.firstOrNull { it.index == row } ?: return
+    scrollBy(galleryReturnCenterDelta(
+        item.offset, item.size, layout.viewportStartOffset, layout.viewportEndOffset,
+    ))
 }

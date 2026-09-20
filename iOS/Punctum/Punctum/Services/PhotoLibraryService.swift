@@ -19,19 +19,35 @@ final class PhotoLibraryService {
         let task = Task { @MainActor in
             let result = photoResult(for: gallery)
             var assets: [PHAsset] = []
-            result.enumerateObjects { asset, _, _ in assets.append(asset) }
+            for index in 0..<result.count {
+                guard !Task.isCancelled else { return }
+                assets.append(result.object(at: index))
+                if index.isMultiple(of: 64) { await Task.yield() }
+            }
             for (index, asset) in assets.enumerated() {
                 guard !Task.isCancelled else { return }
                 await CaptureDateIndex.shared.prepare(asset)
                 if index.isMultiple(of: 32) { await Task.yield() }
             }
             guard generation == orderGeneration, !Task.isCancelled else { return }
-            captureOrder[gallery.id] = assets.sorted {
-                let a = CaptureDateIndex.shared.date(for: $0), b = CaptureDateIndex.shared.date(for: $1)
-                if a != b { return a > b }
-                if $0.modificationDate != $1.modificationDate { return ($0.modificationDate ?? .distantPast) > ($1.modificationDate ?? .distantPast) }
-                return $0.localIdentifier < $1.localIdentifier
+            // Snapshot keys once; sorting large libraries must not monopolize UI work.
+            var keys: [(asset: PHAsset, date: Date, modified: Date, id: String)] = []
+            for (index, asset) in assets.enumerated() {
+                guard !Task.isCancelled else { return }
+                keys.append((asset, CaptureDateIndex.shared.date(for: asset),
+                             asset.modificationDate ?? .distantPast, asset.localIdentifier))
+                if index.isMultiple(of: 64) { await Task.yield() }
             }
+            let snapshot = keys
+            let sorted = await Task.detached(priority: .utility) {
+                snapshot.sorted {
+                    if $0.date != $1.date { return $0.date > $1.date }
+                    if $0.modified != $1.modified { return $0.modified > $1.modified }
+                    return $0.id < $1.id
+                }.map(\.asset)
+            }.value
+            guard generation == orderGeneration, !Task.isCancelled else { return }
+            captureOrder[gallery.id] = sorted
             completedOrderGeneration[gallery.id] = generation
             CaptureDateIndex.shared.save()
         }
@@ -209,18 +225,27 @@ final class PhotoLibraryService {
     func overview(
         for gallery: PunctumGallery,
         excluding excludedIDs: Set<String> = []
-    ) -> GalleryOverview? {
-        let assets = orderedAssets(for: gallery).filter { !excludedIDs.contains($0.localIdentifier) }
-        let count = assets.count
-        let dates = assets.map { CaptureDateIndex.shared.date(for: $0) }
-        let newest = dates.max()
-        let oldest = dates.min()
-
+    ) async -> GalleryOverview? {
+        let assets = orderedAssets(for: gallery)
+        var count = 0
+        var oldest: Date?
+        var newest: Date?
+        var covers: [PhotoItem] = []
+        for (index, asset) in assets.enumerated() {
+            if index.isMultiple(of: 64) {
+                await Task.yield()
+                guard !Task.isCancelled else { return nil }
+            }
+            guard !excludedIDs.contains(asset.localIdentifier) else { continue }
+            count += 1
+            let date = CaptureDateIndex.shared.date(for: asset)
+            oldest = min(oldest ?? date, date)
+            newest = max(newest ?? date, date)
+            if covers.count < 4 { covers.append(PhotoItem(asset: asset, name: "Photo")) }
+        }
         return GalleryOverview(
-            gallery: gallery,
-            count: count,
-            timeSpan: PunctumFormatting.timeSpan(oldest: oldest, newest: newest),
-            covers: latestPhotos(in: gallery, limit: 4, excluding: excludedIDs)
+            gallery: gallery, count: count,
+            timeSpan: PunctumFormatting.timeSpan(oldest: oldest, newest: newest), covers: covers
         )
     }
 

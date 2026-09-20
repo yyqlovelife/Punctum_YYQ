@@ -19,6 +19,8 @@ import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.model.Photo
 import com.punctum.gallery.model.SystemAlbum
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -172,6 +174,7 @@ object PhotoRepository {
             val cachedBySignature = cachedPhotos.associateBy { "${it.name}|${it.fileSizeBytes}" }
             val files = scanFiles(context, treeUri)
             val photos = files.map { file ->
+                coroutineContext.ensureActive()
                 val cached = cachedByUri[file.uri.toString()]
                     ?: cachedBySignature["${file.name}|${file.sizeBytes}"]
                 if (cached != null &&

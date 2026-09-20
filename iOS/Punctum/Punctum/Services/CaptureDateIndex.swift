@@ -8,6 +8,7 @@ import Photos
 final class CaptureDateIndex {
     static let shared = CaptureDateIndex()
     struct Entry: Codable { let modification: Date?; let capture: Date }
+    private var saveTask: Task<Void, Never>?
     private var entries: [String: Entry] = [:]
     private let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("capture-dates-v1.json")
     private init() {
@@ -43,5 +44,16 @@ final class CaptureDateIndex {
         formatter.dateFormat = offset == nil ? "yyyy:MM:dd HH:mm:ss" : "yyyy:MM:dd HH:mm:ssXXX"
         return formatter.date(from: raw + (offset ?? ""))
     }
-    func save() { if let data = try? JSONEncoder().encode(entries) { try? data.write(to: url, options: .atomic) } }
+    func save() {
+        let snapshot = entries
+        let destination = url
+        let previous = saveTask
+        saveTask = Task.detached(priority: .utility) {
+            // Serialize writes so an older snapshot cannot overwrite a newer one.
+            await previous?.value
+            if let data = try? JSONEncoder().encode(snapshot) {
+                try? data.write(to: destination, options: .atomic)
+            }
+        }
+    }
 }

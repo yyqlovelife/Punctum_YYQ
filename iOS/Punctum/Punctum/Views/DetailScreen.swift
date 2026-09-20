@@ -10,10 +10,19 @@ struct DetailScreen: View {
     let onClose: ([PhotoItem]) -> Void
     let onMoveInLibrary: (PhotoItem, AlbumOption) async throws -> Void
     let onCommitMove: (PhotoItem, AlbumOption) -> Void
+    let hasMorePhotos: Bool
     var onLoadMore: () -> Void = {}
+    var onCommitComparisonDelete: (PhotoItem) -> Void = { _ in }
 
     @State private var currentIndex: Int
     @State private var selectedPhotoID: String?
+    @State private var showComparisonPicker = false
+    @State private var comparisonOriginal: PhotoItem?
+    @State private var selectedComparisonPhoto: ComparisonPhoto?
+    @State private var comparisonSession: ComparisonSession?
+    @State private var comparisonError: String?
+    @State private var committedComparisonIDs: Set<String> = []
+    @State private var comparisonDeleteInFlight = false
     @State private var pinchActive = false
     @State private var controlsVisible = false
     @State private var deleteProgress: CGFloat = 0
@@ -46,7 +55,9 @@ struct DetailScreen: View {
         onClose: @escaping ([PhotoItem]) -> Void,
         onMoveInLibrary: @escaping (PhotoItem, AlbumOption) async throws -> Void,
         onCommitMove: @escaping (PhotoItem, AlbumOption) -> Void,
-        onLoadMore: @escaping () -> Void = {}
+        hasMorePhotos: Bool = false,
+        onLoadMore: @escaping () -> Void = {},
+        onCommitComparisonDelete: @escaping (PhotoItem) -> Void = { _ in }
     ) {
         self.photos = photos
         self.startIndex = startIndex
@@ -55,7 +66,9 @@ struct DetailScreen: View {
         self.onClose = onClose
         self.onMoveInLibrary = onMoveInLibrary
         self.onCommitMove = onCommitMove
+        self.hasMorePhotos = hasMorePhotos
         self.onLoadMore = onLoadMore
+        self.onCommitComparisonDelete = onCommitComparisonDelete
         let initialIndex = min(max(startIndex, 0), max(photos.count - 1, 0))
         _visiblePhotos = State(initialValue: photos)
         _currentIndex = State(initialValue: initialIndex)
@@ -218,7 +231,8 @@ struct DetailScreen: View {
                         onClose: closeDetail,
                         onEdit: editInLightroom,
                         onSave: { savePage(screenSize: screenSize) },
-                        onMove: { showMovePicker = true }
+                        onMove: { showMovePicker = true },
+                        onCompare: beginComparison
                     )
                     .padding(.top, geometry.safeAreaInsets.top)
                     .frame(maxHeight: .infinity, alignment: .top)
@@ -246,17 +260,14 @@ struct DetailScreen: View {
                 frozenDeleteReplacementID = nil
             }
             if visiblePhotos.indices.contains(index) { selectedPhotoID = visiblePhotos[index].id }
-            if index >= photos.count - 4 { onLoadMore() }
         }
         .onChange(of: photos) { _, updated in
-            visiblePhotos = updated.filter { !pendingDeletedIDs.contains($0.id) }
+            guard !comparisonDeleteInFlight else { return }
+            visiblePhotos = updated.filter { !pendingDeletedIDs.contains($0.id) && !committedComparisonIDs.contains($0.id) }
         }
         .onChange(of: visiblePhotos) { _, updated in
             let photoIDs = updated.map(\.id)
-            guard !photoIDs.isEmpty else {
-                closeDetail()
-                return
-            }
+            guard !photoIDs.isEmpty else { return }
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
@@ -278,6 +289,15 @@ struct DetailScreen: View {
             let count = defaults.integer(forKey: "delete_red_toast_count")
             showDeleteHint = count < 2
             if count < 2 { defaults.set(count + 1, forKey: "delete_red_toast_count") }
+        }
+        .task(id: pagination) {
+            // Defer until list/selection updates settle; SwiftUI cancels superseded checks.
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            if pagination.shouldLoad {
+                if visiblePhotos.isEmpty { settleNativeDeletion() }
+                onLoadMore()
+            } else if pagination.shouldClose { closeDetail() }
         }
         .task { await showTutorialsIfNeeded() }
         .task(id: currentPhoto?.id) {
@@ -301,7 +321,72 @@ struct DetailScreen: View {
             )
             .punctumDialogPresentation()
         }
+        .sheet(isPresented: $showComparisonPicker, onDismiss: {
+            if let original = comparisonOriginal, let selected = selectedComparisonPhoto {
+                comparisonSession = ComparisonSession(original: original, selected: selected)
+            }
+            selectedComparisonPhoto = nil
+        }) {
+            ComparisonPhotoPicker { result in
+                switch result {
+                case .success(let selected):
+                    if let selected, selected.id == comparisonOriginal?.id {
+                        comparisonError = "请选择另一张照片进行对比。"
+                    } else { selectedComparisonPhoto = selected }
+                case .failure(let error): comparisonError = error.localizedDescription
+                }
+                showComparisonPicker = false
+            }
+        }
+        .fullScreenCover(item: $comparisonSession) { session in
+            ComparisonScreen(session: session, onClose: { comparisonSession = nil },
+                             onDelete: { try await deleteComparedPhoto($0, original: session.original) })
+        }
+        .alert("无法对比", isPresented: Binding(get: { comparisonError != nil && !showComparisonPicker },
+                                                 set: { if !$0 { comparisonError = nil } })) {
+            Button("好", role: .cancel) { comparisonError = nil }
+        } message: { Text(comparisonError ?? "") }
         .background(PunctumTheme.ink)
+    }
+
+    private var pagination: DetailPagination {
+        DetailPagination(index: currentIndex, visibleCount: visiblePhotos.count,
+                         loadedCount: photos.count, photoID: currentPhoto?.id,
+                         hasMore: hasMorePhotos,
+                         blocked: closing || comparisonDeleteInFlight || moving ||
+                            (!visiblePhotos.isEmpty && (deletionFinishing || deletionSettling || deletionCard != nil)))
+    }
+
+    private func beginComparison() {
+        guard let photo = currentPhoto, !moving, deletionCard == nil else { return }
+        comparisonOriginal = photo
+        selectedComparisonPhoto = nil
+        livePlaybackActive = false
+        pinchActive = false
+        pageViewGeneration += 1 // Stop any retained zoom/Live Photo before presenting the picker.
+        showComparisonPicker = true
+    }
+
+    @MainActor private func deleteComparedPhoto(_ item: ComparisonPhoto, original: PhotoItem) async throws {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [item.id], options: nil).firstObject else {
+            throw ComparisonError.photoAccessRequired
+        }
+        let photo = item.photo ?? PhotoItem(asset: asset, name: "")
+        comparisonDeleteInFlight = true
+        do { try await PhotoLibraryService.shared.delete(photo) }
+        catch { comparisonDeleteInFlight = false; throw error }
+        let returnID = ComparisonState.returningID(ids: visiblePhotos.map(\.id), originalID: original.id, deletedID: photo.id)
+        committedComparisonIDs.insert(photo.id)
+        pendingDeletedIDs.remove(photo.id)
+        pendingDeletedPhotos.removeAll { $0.id == photo.id }
+        selectedPhotoID = returnID
+        visiblePhotos.removeAll { $0.id == photo.id }
+        currentIndex = returnID.flatMap { id in visiblePhotos.firstIndex { $0.id == id } } ?? 0
+        comparisonSession = nil
+        comparisonDeleteInFlight = false
+        pageViewGeneration += 1
+        if visiblePhotos.isEmpty { closeDetail() }
+        onCommitComparisonDelete(photo)
     }
 
     private func isInsideControls(_ location: CGPoint, safeAreaTop: CGFloat) -> Bool {
@@ -589,6 +674,7 @@ private struct DetailControls: View {
     let onEdit: () -> Void
     let onSave: () -> Void
     let onMove: () -> Void
+    let onCompare: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -606,6 +692,13 @@ private struct DetailControls: View {
             }
             .buttonStyle(IconPressButtonStyle())
             .accessibilityLabel("移动到其他图集")
+            Button(action: onCompare) {
+                ComparePhotosIcon().frame(width: 27, height: 27)
+                    .frame(width: 56, height: 56).contentShape(Rectangle())
+            }
+            .buttonStyle(IconPressButtonStyle())
+            .accessibilityLabel("对比照片")
+            .accessibilityIdentifier("detail-compare")
         }
         .padding(.horizontal, 4)
         .frame(height: Self.rowHeight)
@@ -704,10 +797,10 @@ private struct DetailPage: View {
     @Binding var livePlaybackActive: Bool
     var pinchActive: Binding<Bool> = .constant(false)
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var zoomTouchActive = false
+    @State private var zoomResetID = 0
+    @State private var zoomOwnsInteraction = false
     @State private var zoomScale: CGFloat = 1
     @State private var zoomOffset: CGSize = .zero
-    @State private var zoomAnchor: UnitPoint = .center
     @State private var zoomResetTask: Task<Void, Never>?
     var pagingEnabled: Bool = true
     var isSelected: Bool = true
@@ -761,7 +854,7 @@ private struct DetailPage: View {
                         livePhoto: livePhoto,
                         playbackMode: playbackMode,
                         hasBegunPlayback: hasBegunPlayback,
-                        zoomScale: zoomScale, zoomAnchor: zoomAnchor, zoomOffset: zoomOffset,
+                        zoomScale: zoomScale, zoomOffset: zoomOffset,
                         onFrameChange: { imageFrameInPage = $0 },
                         onTopAreaTap: onToggleControls,
                         onDidBeginPlayback: { hasBegunPlayback = true },
@@ -799,21 +892,21 @@ private struct DetailPage: View {
                     onTapRight: onNext,
                     onTapCenter: { if !pinchActive.wrappedValue { onToggleControls() } },
                     pinchEnabled: isSelected && !interactionLocked,
-                    onPinchChange: { scale, anchor, translation in
-                        if !zoomTouchActive {
-                            zoomTouchActive = true
-                            zoomResetTask?.cancel()
-                            haltPlayback()
-                            pinchActive.wrappedValue = true
-                            zoomAnchor = UnitPoint(x: anchor.x, y: anchor.y)
+                    onZoomChange: { zoom, locked in
+                        zoomResetTask?.cancel()
+                        zoomResetTask = nil
+                        if locked { haltPlayback() }
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            zoomScale = zoom.scale
+                            zoomOffset = zoom.offset
+                            zoomOwnsInteraction = locked
+                            pinchActive.wrappedValue = locked
                         }
-                        let nextScale = min(max(scale, 1), 3)
-                        if nextScale > 1 || zoomScale > 1 {
-                            zoomOffset = translation
-                        }
-                        zoomScale = nextScale
                     },
-                    onPinchEnd: resetZoom
+                    zoomResetID: zoomResetID,
+                    onZoomReset: resetZoom
                 )
                 .frame(width: screenSize.width)
                 .frame(maxHeight: .infinity)
@@ -858,25 +951,26 @@ private struct DetailPage: View {
     }
 
     private func resetZoom() {
-        zoomTouchActive = false
         zoomResetTask?.cancel()
-        withAnimation(reduceMotion ? .easeOut(duration: 0.16) : .interactiveSpring(response: 0.30, dampingFraction: 0.88)) {
+        withAnimation(reduceMotion ? nil : .interactiveSpring(response: 0.30, dampingFraction: 0.88)) {
             zoomScale = 1
             zoomOffset = .zero
         }
         zoomResetTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(reduceMotion ? 160 : 310))
             guard !Task.isCancelled else { return }
+            zoomOwnsInteraction = false
             pinchActive.wrappedValue = false
             zoomResetTask = nil
         }
     }
 
     private func clearZoom() {
-        if zoomTouchActive || zoomResetTask != nil { pinchActive.wrappedValue = false }
+        if zoomOwnsInteraction || zoomResetTask != nil { pinchActive.wrappedValue = false }
+        zoomOwnsInteraction = false
+        zoomResetID += 1
         zoomResetTask?.cancel()
         zoomResetTask = nil
-        zoomTouchActive = false
         zoomScale = 1
         zoomOffset = .zero
     }
@@ -1004,13 +1098,15 @@ private struct DetailPhotoFrame: View {
             }
         }
         .frame(width: layout.imageSize.width, height: imageHeight)
-        .onGeometryChange(for: CGRect.self) { geo in
-            geo.frame(in: .named("detailPage"))
-        } action: { frame in
-            onFrameChange(frame)
-        }
         .scaleEffect(zoomScale, anchor: zoomAnchor)
         .offset(zoomOffset)
+        .background {
+            Color.clear.onGeometryChange(for: CGRect.self) { geo in
+                geo.frame(in: .named("detailPage"))
+            } action: { frame in
+                onFrameChange(frame)
+            }
+        }
         .frame(maxWidth: .infinity)
         .padding(.top, topPadding)
         .overlay(alignment: .top) {

@@ -168,6 +168,7 @@ internal fun DetailScreen(
     moveError: String?,
     onDelete: (Photo) -> Unit,
     onClose: () -> Unit,
+    onPhotoViewed: (Photo) -> Unit,
     onWarmImages: (Int) -> Unit,
     onRequestSystemAlbums: () -> Unit,
     onMovePhoto: (Photo, SystemAlbum) -> Unit,
@@ -249,6 +250,10 @@ internal fun DetailScreen(
                     ?.let(onWarmImages)
             }
         }
+    }
+
+    androidx.compose.runtime.SideEffect {
+        if (!deleteTransitionLocked) currentPhoto?.let(onPhotoViewed)
     }
 
     LaunchedEffect(pagerState.currentPage) {

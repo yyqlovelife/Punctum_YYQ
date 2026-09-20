@@ -12,6 +12,12 @@ import android.graphics.RectF
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -20,6 +26,18 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 object GalleryImageCache {
+    private val thumbnailMutex = Mutex()
+    private val previewDecoders = Semaphore(2)
+
+    /** Only malformed provider previews take this small, original-framing fallback. */
+    suspend fun loadOriginalPreview(context: Context, uri: Uri): Bitmap? =
+        withContext(Dispatchers.IO) {
+            previewDecoders.withPermit {
+                coroutineContext.ensureActive()
+                loadBitmapBlocking(context, uri, 320)
+            }
+        }
+
     const val TICKET_COLOR_VERSION = 5
 
     private const val THUMB_SIZE = 1400
@@ -42,12 +60,24 @@ object GalleryImageCache {
             val legacy = legacyThumbFile(context, galleryKey, uri)
             if (legacy.isUsableLegacyThumbnail()) return@withContext legacy.absolutePath
 
-            val bitmap = loadBitmap(context, uri, THUMB_SIZE) ?: return@withContext null
-            file.parentFile?.mkdirs()
-            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 92, it) }
-            bitmap.recycle()
-            if (legacy.exists()) legacy.delete()
-            file.absolutePath
+            thumbnailMutex.withLock {
+                coroutineContext.ensureActive()
+                if (file.exists() && file.length() > 0L) return@withLock file.absolutePath
+                val bitmap = loadBitmap(context, uri, THUMB_SIZE) ?: return@withLock null
+                val temporary = File(file.parentFile, "${file.name}.tmp")
+                try {
+                    coroutineContext.ensureActive()
+                    file.parentFile?.mkdirs()
+                    temporary.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                    coroutineContext.ensureActive()
+                    if (!temporary.renameTo(file)) return@withLock null
+                    if (legacy.exists()) legacy.delete()
+                    file.absolutePath
+                } finally {
+                    bitmap.recycle()
+                    temporary.delete()
+                }
+            }
         }
 
     suspend fun buildCovers(context: Context, galleryKey: String, coverUris: List<Uri>): CoverAssets =

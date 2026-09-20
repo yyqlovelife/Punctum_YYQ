@@ -1,5 +1,63 @@
 # iOS 更新说明
 
+## 当前发布与接续 · 2026-09-20
+
+- **iOS 0.5.9 / 59**：新增大图对比模式，支持系统单选、横竖布局、独立/联动缩放及删除返回；同时包含1–5倍保留缩放、批量删除性能和连续翻页续载修复。
+- **Android 0.5.8 / 58**：包含按进入时可见范围判断的返回定位、返回闪动修复、缓存合并写入、按实际尺寸解码、逐张高清发布及异常预览比例修复。首次进入图集支持可取消加载，超过500ms才显示居中小卡片，完成即关闭。
+- 安卓最新本地包：`APK/Punctum-0.5.8-delayed-loading.apk`，已覆盖安装PMX110；iOS本地包：`iOS/IPA/Punctum-0.5.9-unsigned.ipa`。
+- 当前实现与待验收项见本节及 `SESSION_HANDOFF_2026-09-20.md`。下方旧日期内容为历史记录，旧“最新包”“未提交上传”及版本号均按当时范围理解。
+- 发布源码、资源、测试、构建配置与文档到GitHub；安装包、签名凭据和含用户照片/URI的原始录屏与设备日志仅留本机。公开验证摘要见 `docs/RELEASE_VALIDATION_2026-09-20.md`。
+
+
+## 当前接续状态 · 2026-09-20
+
+新对话先读 [本轮交接](../SESSION_HANDOFF_2026-09-20.md)。两端仍为0.5.8/58，本轮增量未提交上传。
+
+- Android最新包：`APK/Punctum-0.5.8-return-flash-fix.apk`，已覆盖安装PMX110。用户确认返回定位逻辑正确；随后的一帧闪动已调整显示顺序，尚待用户复测。6项位置回归通过。
+- iOS最新包：`iOS/IPA/Punctum-0.5.8-pagination-fix-unsigned.ipa`，含保留缩放、对比模式、批删卡顿和连续翻页修复；41项回归通过，剩余真机验收见交接。
+- 构建证据归档：`docs/verification/2026-09-20/`。以下旧日期章节保留历史，其“最新包”和验收结论以当时范围为准。
+
+
+## Detail pagination fix - 2026-09-18
+
+Latest IPA: `iOS/IPA/Punctum-0.5.8-pagination-fix-unsigned.ipa`. SHA256: `e53c5526ab35a61ded34805c0f06c395f22eb685342d3e54ab97e9cd11d71404`. Release and ZIP/version checks passed. Logs: `/tmp/punctum-pagination-final-tests.log`, `/tmp/punctum-pagination-release.log`. Physical-device continuous browsing remains to be verified.
+
+The old trigger compared an index into visiblePhotos with photos.count, which still included pending deletions. With 80 loaded and 4 removed, the maximum visible index was 75 while the trigger required 76. Checking only index changes also missed entry at the final loaded photo and deletions that kept the same index.
+
+DetailPagination now keys the loading task on selection, visible/loaded counts, exhaustion and gesture completion. It checks on entry and after removals/appends, uses the visible boundary, cancels superseded checks, and retains the existing model loading guard. Empty visible batches refill until exhaustion; deletion state is cleared if the old pager has been removed. Published exhaustion allows an empty final batch to close correctly. Existing ID-based selection preservation remains.
+
+Six strategy tests cover 300 photos across four batches, direct entry at the last photo, 4/20/50/79 pending deletions, unchanged-index deletion, empty batches and gesture completion. All 41 XCTest cases passed; this is model validation, not a claim of 300 physical swipe gestures on an iPhone. Includes comparison mode and the preceding batch-delete performance fix; version stays 0.5.8/58. Android unchanged; no commit or upload.
+
+
+## 批量删除卡顿修复 · 2026-09-18
+
+验证：35项XCTest全部通过（`/tmp/punctum-batch-delete-final-tests.log`），Release通过（`/tmp/punctum-batch-delete-release.log`）；IPA完整性与0.5.8/58核对通过。最新包 `iOS/IPA/Punctum-0.5.8-batch-delete-fix-unsigned.ipa`，SHA256 `63d5f706e2bb20ad7e9846a136dd0dd2f2cf2e0ba46490658e3d0b92c4c79fbb`。真机批量删除滚动性能待复测，未声称黑屏问题已完成真机验收。
+
+用户在真机批量标记数十张、返回列表确认删除后卡死，继续滚动可能黑屏。源码发现：删除通知触发全图集刷新；概览扫描、排序与索引写盘占用主线程；行重排会批量请求原图元数据。未取得该手机的卡死/内存终止日志，因此不把黑屏归因写成已证实。
+
+本轮修改：删除期间合并刷新并暂停追加分页，防重复提交；过期刷新结果丢弃；概览分批让出主线程且旧任务可取消；排序和索引写盘移到后台，写盘串行保持新旧顺序；列表期间不生成首页封面；移除列表单元格出现时的原图元数据预读，保留点击读取。原生280ms删除、对比模式、版本0.5.8/58不变。
+
+需真机复测：同一图集标记30–50张，确认删除后连续上下滚动；系统取消后照片仍在；删除后继续分页；回首页封面更新。未用用户照片做删除测试。
+
+
+## 未发版 · 2026-09-18
+
+仅iOS，0.5.8 / 58。新增大图对比：系统单图选择；两竖图左右排，其余上下排；默认独立缩放，可开启联动同步倍率与平移；两图均可确认删除并返回原图或下一张。所有应用按钮复用下沉反馈。受限权限提供系统照片访问补充入口。
+
+35项回归及Release通过，已验证选图、混合布局、独立/联动点击缩放、双击复原和删新选合成测试图返回；图标最终修复、多指、删原图与受限权限待复核。包：`iOS/IPA/Punctum-0.5.8-comparison-unsigned.ipa`。见对比交接与QA记录。
+
+## 未发版 · 2026-09-17
+
+仅 iOS，版本保持 `0.5.8 / 58`。大图缩放上限从 3 倍提高到 5 倍，松手后保留大小与位置。
+
+- 放大后支持单指、双指上下左右拖动，继续捏合可在当前倍率基础上缩小或放大。拖动限制在图像边界，避免把照片移出可操作范围。
+- 双击放大图片的任意可见位置恢复原始大小与位置；也可双指缩小至 1 倍。原尺寸单击、左右切图等操作沿用原逻辑。
+- 放大期间暂停分页、上滑删除、实况播放及详情滚动，复原后恢复；离开照片或应用失活时清理缩放与手势锁。参数布局不参与缩放。
+- 保留已确认的 280ms 原生删除动效；Android 保持原体验。
+- 当前安装包与验证结果见仓库交接文档及 `design-qa.md`；真机多指手感待用户复测。
+
+以下为已发布版本的历史行为，当前 iOS 缩放以本节为准。
+
 ## 0.5.8 · 2026-09-16
 
 仅 iOS，版本保持 `0.5.8 / 58`。汇总 9 月 15–16 日的能力对齐、浏览修复和删除动效重做。用户已在真机确认原生快照版删除明显更流畅，并确认最终 **280ms** 收缩节奏可以保留。

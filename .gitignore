@@ -17,3 +17,6 @@ xcuserdata/
 /APK/*.apk
 /iOS/IPA/*.ipa
 /IPA/*.ipa
+
+# Local device captures may contain private photos, URIs and diagnostics.
+/docs/verification/

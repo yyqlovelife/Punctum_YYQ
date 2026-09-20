@@ -1,5 +1,23 @@
 # Design QA: original reversal-film card restored
 
+## 当前发布与接续 · 2026-09-20
+
+- **iOS 0.5.9 / 59**：新增大图对比模式，支持系统单选、横竖布局、独立/联动缩放及删除返回；同时包含1–5倍保留缩放、批量删除性能和连续翻页续载修复。
+- **Android 0.5.8 / 58**：包含按进入时可见范围判断的返回定位、返回闪动修复、缓存合并写入、按实际尺寸解码、逐张高清发布及异常预览比例修复。首次进入图集支持可取消加载，超过500ms才显示居中小卡片，完成即关闭。
+- 安卓最新本地包：`APK/Punctum-0.5.8-delayed-loading.apk`，已覆盖安装PMX110；iOS本地包：`iOS/IPA/Punctum-0.5.9-unsigned.ipa`。
+- 当前实现与待验收项见本节及 `SESSION_HANDOFF_2026-09-20.md`。下方旧日期内容为历史记录，旧“最新包”“未提交上传”及版本号均按当时范围理解。
+- 发布源码、资源、测试、构建配置与文档到GitHub；安装包、签名凭据和含用户照片/URI的原始录屏与设备日志仅留本机。公开验证摘要见 `docs/RELEASE_VALIDATION_2026-09-20.md`。
+
+
+## 当前接续状态 · 2026-09-20
+
+新对话先读 [本轮交接](SESSION_HANDOFF_2026-09-20.md)。两端仍为0.5.8/58，本轮增量未提交上传。
+
+- Android最新包：`APK/Punctum-0.5.8-return-flash-fix.apk`，已覆盖安装PMX110。用户确认返回定位逻辑正确；随后的一帧闪动已调整显示顺序，尚待用户复测。6项位置回归通过。
+- iOS最新包：`iOS/IPA/Punctum-0.5.8-pagination-fix-unsigned.ipa`，含保留缩放、对比模式、批删卡顿和连续翻页修复；41项回归通过，剩余真机验收见交接。
+- 构建证据归档：`docs/verification/2026-09-20/`。以下旧日期章节保留历史，其“最新包”和验收结论以当时范围为准。
+
+
 ## 当前验收结论 · 2026-09-16
 
 用户先确认 iOS 原生快照删除“确实流畅了很多”，在收缩时长从 400ms 改为 280ms 后明确确认“可以了这个状态”，并授权同步近期源码和文档至 GitHub。因此 **原生快照删除流畅度及 280ms 节奏已获真机确认**。Android 照片缩放、双指平移与回弹此前已确认。两端保持 0.5.8 / 58。
@@ -373,3 +391,117 @@ Scope: full uncommitted Android 0.5.8 photo gestures and iOS 0.5.8 parity/browsi
 - README, iOS README, platform changelogs, changelog guidance, root index and repository handoff updated together. Earlier local handoff retained outside the repository as an archive; current copy synchronized to repository PUNCTUM_HANDOFF.md.
 - Prior local/remote baseline trees verified equal (`e174ef2a0ac161bf17721eb713811b8a9c44286f`). Their parallel Git history was reconciled without changing baseline content before collecting this upload.
 - APK/IPA and signing material remain excluded. User confirmation is scoped to Android pinch/pan and iOS native deletion feel/280ms timing; it does not imply all earlier reported issues or gesture combinations were independently reaccepted.
+
+
+## iOS persistent photo zoom — 2026-09-17
+
+Baseline: clean local `4fea135`, 2026-09-16 repository/changelog/README/handoff snapshot. Reviewed current root and iOS README, CHANGELOG, both platform changelogs, maintenance rules, PRD, QA history, synchronized chat handoff and older archived handoffs. Archived return-on-release descriptions remain historical. Only iOS implementation changes; version stays 0.5.8 / 58. No commit or upload.
+
+The photo now retains 1–5x scale and position after release. One/two-finger pan moves the enlarged image in four directions; successive pinches continue from the retained pose. Double tap anywhere on the visible enlarged image or pinch down to 1x restores the original pose. The expanded image bounds are hit-tested; metadata layout stays fixed. Pan bounds keep the image reachable. Zoom locks paging, deletion, metadata scrolling and Live Photo hold/tap until reset. Background, selection change and teardown release state and suspended ancestor recognizers. Existing native deletion remains 280ms.
+
+### review-animations
+
+| Before | After | Why |
+| --- | --- | --- |
+| Every release springs back | Release retains the exact transform | Preserve the user's inspection position |
+| Every pinch starts from 1x | Incremental scale and focal-point compensation | Continue from the current image pose |
+| Panning limited to pinch lifetime | One/two-finger pan plus pinch centroid tracking; rebase on touch-count changes | Allow continued inspection and avoid centroid jumps |
+| Hit region uses original bounds | Hit region follows the enlarged image | Double tap/pan also work outside the original frame |
+| Gesture end restores competing pans | Keep them suspended while zoomed; restore on reset/teardown | Prevent accidental paging/deletion |
+| All reset paths animate | Direct manipulation is unanimated; double-tap retains 0.30 response / 0.88 damping spring, reduced motion restores immediately | Preserve spatial feedback without forced release motion |
+
+Source review: **Approve for device trial**. Only image scale/offset change; no metadata layout animation or new per-frame photo request. Old pending reset unlocks are cancelled on renewed manipulation. Physical multi-touch feel and rapid interruption during the double-tap return still require device testing.
+
+Validation:
+
+- Final XCTest: **28 tests, 0 failures**, including 7 new zoom tests. Covers successive pinches, 5x clamp and reversal, focal-point retention, four-direction pan bounds, reset to 1x, retained release/ancestor lock/double-tap reset, pinch-only centroid movement and teardown. Recognizer tests drive callback state; they do not synthesize physical touches.
+- Test log: `/tmp/punctum-ios-persistent-zoom-tests.log`; Release: `/tmp/punctum-ios-persistent-zoom-release.log`, **BUILD SUCCEEDED**. Existing unrelated warnings remain.
+- Simulator: installed and launched latest Debug on iPhone 14 Pro / iOS 18.2; tall 600x1600 fixture retained top/bottom edges, right-edge tap advanced No.1 to No.2, landscape image and EXIF layout remained correct. Screenshot `/tmp/punctum-ios-persistent-zoom-layout.png`.
+- `git diff --check` and IPA ZIP/Info.plist checks passed. Android source/version and native deletion implementation unchanged.
+- Paired physical iPhones were unavailable. No physical install or full UI multi-touch pass claimed. User should test release retention, single/two-finger pans, changing touch count, repeated pinch at different centers, 5x reversal, double tap on enlarged parts, pinch to 1x, and paging/deletion/Live Photo after reset.
+
+Delivery: `iOS/IPA/Punctum-0.5.8-persistent-zoom-unsigned.ipa`; use the existing AltStore/AltServer identity for an overlay install.
+SHA256: `879454aa71dc3cca8177014db9e8aff6d31ea935c2c55c5d51e0f6e58b47e4ee`.
+
+
+## iOS comparison — 2026-09-18
+
+Implemented system single-image selection, orientation-based split layout, independent/linked persistent zoom, per-cell confirmed PhotoKit deletion and stable return identity. Resumed the September 17 draft; fixed the RootView callback mistakenly attached to GalleryScreen, included the generated icon, and added the limited-library access path.
+
+| Before | After | Why |
+| --- | --- | --- |
+| Static comparison transforms | Direct manipulation with persistent 1–5x poses | Keep inspection position after release |
+| Immediate tap reset | 0.30s / 0.88 UIKit spring, presentation-layer takeover on interruption | Match existing return motion and avoid restarting from the target pose |
+| Separate cell interaction | Optional scale and normalized-offset synchronization | Preserve direction across unlike aspect ratios |
+| New controls could vary in feedback | Existing IconPressButtonStyle on application-owned controls | Match current press feedback and reduced-motion handling |
+
+review-animations: source-level Approve for device trial; transform-only image animation, uncluttered clipped cells, existing button style, direct manipulation without implicit animation, reduced motion honored. Real multi-touch feel remains unverified.
+
+35 tests passed, zero failures (`/tmp/punctum-ios-compare-tests.log`), including 7 comparison tests; Release passed (`/tmp/punctum-ios-comparison-release-final.log`). IPA ZIP, version0.5.8/build58 and bundled icon verified. Current package `iOS/IPA/Punctum-0.5.8-comparison-unsigned.ipa`, SHA256 `0a558663028884b9901dacc89d20cc0db76b12c82022a735c8239bd51ef8633f`.
+
+UI attempt: CUA reported Mac locked and unable to auto-unlock. Asked user to unlock; no comparison UI, PhotoKit deletion, or multi-touch pass claimed. No user photo was deleted during this run. Existing layout/paging observations in the prior section predate comparison and must not be reused as comparison acceptance. Remaining checklist is in COMPARISON_HANDOFF.md. Android source unchanged; no commit or upload.
+
+
+### Unlocked UI follow-up — 2026-09-18
+
+Observed system image picker, mixed-orientation rows, independent tap zoom, linked tap zoom, linked double-tap reset, app confirmation cancellation and native PhotoKit cancellation. Deleting only synthetic LIVE B through PhotoKit returned to the original photo. These checks do not establish real multi-touch behavior.
+
+The comparison toolbar icon was tappable but invisible. Explicit original rendering alone did not resolve the observed display; removed screen blend mode and rebuilt Debug successfully. Final visual confirmation remains pending: Mac locked again during subsequent picker testing. Do not claim icon acceptance or original-photo deletion acceptance. Latest simulator library count was 32; no further deletion was performed in this continuation, and this count alone is not deletion-flow evidence.
+
+Remaining: icon visibility; portrait-pair columns and landscape-pair rows on screen; original/last/only deletion return; limited-access picker; cloud retry; physical pinch and one/two-finger pan. Model coverage remains 35 tests, zero failures.
+
+## 批量删除卡顿修复 · 2026-09-18
+
+验证：35项XCTest全部通过（`/tmp/punctum-batch-delete-final-tests.log`），Release通过（`/tmp/punctum-batch-delete-release.log`）；IPA完整性与0.5.8/58核对通过。最新包 `iOS/IPA/Punctum-0.5.8-batch-delete-fix-unsigned.ipa`，SHA256 `63d5f706e2bb20ad7e9846a136dd0dd2f2cf2e0ba46490658e3d0b92c4c79fbb`。真机批量删除滚动性能待复测，未声称黑屏问题已完成真机验收。
+
+用户在真机批量标记数十张、返回列表确认删除后卡死，继续滚动可能黑屏。源码发现：删除通知触发全图集刷新；概览扫描、排序与索引写盘占用主线程；行重排会批量请求原图元数据。未取得该手机的卡死/内存终止日志，因此不把黑屏归因写成已证实。
+
+本轮修改：删除期间合并刷新并暂停追加分页，防重复提交；过期刷新结果丢弃；概览分批让出主线程且旧任务可取消；排序和索引写盘移到后台，写盘串行保持新旧顺序；列表期间不生成首页封面；移除列表单元格出现时的原图元数据预读，保留点击读取。原生280ms删除、对比模式、版本0.5.8/58不变。
+
+需真机复测：同一图集标记30–50张，确认删除后连续上下滚动；系统取消后照片仍在；删除后继续分页；回首页封面更新。未用用户照片做删除测试。
+
+## Detail pagination fix - 2026-09-18
+
+Latest IPA: `iOS/IPA/Punctum-0.5.8-pagination-fix-unsigned.ipa`. SHA256: `e53c5526ab35a61ded34805c0f06c395f22eb685342d3e54ab97e9cd11d71404`. Release and ZIP/version checks passed. Logs: `/tmp/punctum-pagination-final-tests.log`, `/tmp/punctum-pagination-release.log`. Physical-device continuous browsing remains to be verified.
+
+The old trigger compared an index into visiblePhotos with photos.count, which still included pending deletions. With 80 loaded and 4 removed, the maximum visible index was 75 while the trigger required 76. Checking only index changes also missed entry at the final loaded photo and deletions that kept the same index.
+
+DetailPagination now keys the loading task on selection, visible/loaded counts, exhaustion and gesture completion. It checks on entry and after removals/appends, uses the visible boundary, cancels superseded checks, and retains the existing model loading guard. Empty visible batches refill until exhaustion; deletion state is cleared if the old pager has been removed. Published exhaustion allows an empty final batch to close correctly. Existing ID-based selection preservation remains.
+
+Six strategy tests cover 300 photos across four batches, direct entry at the last photo, 4/20/50/79 pending deletions, unchanged-index deletion, empty batches and gesture completion. All 41 XCTest cases passed; this is model validation, not a claim of 300 physical swipe gestures on an iPhone. Includes comparison mode and the preceding batch-delete performance fix; version stays 0.5.8/58. Android unchanged; no commit or upload.
+
+## Android detail return position - 2026-09-19
+
+6 JVM tests passed, Release built, APK signature verified. Package: `APK/Punctum-0.5.8-detail-return-fix.apk`; SHA256 `06696feb6af1174eb5348c3a891e73edfcc5a2d0104de73aba009dc84d38bc51`. Build log: `/tmp/punctum-android-return-position-final.log`.
+
+Returning from detail now anchors the gallery to the last viewed photo URI instead of retaining the original list position. Detail reports the displayed photo after composition; close resolves an undeleted successor or predecessor if needed. The gallery scrolls directly to that photo's two-photo row (including the header offset). Pending delete confirmation, removal, cancellation and restoration recalculate the row by URI. Manual list dragging clears the anchor; opening detail or switching galleries clears the previous return request.
+
+Regression scope: ordinary browsing, earlier photos removed/restored, deleting the current/last photo, empty albums, and header/two-column row offsets. PMX110 connected near the end of the run; `adb install -r` completed successfully, preserving app data. Physical navigation and deletion flows still need verification. iOS unchanged by this task. Version remains 0.5.8 / 58; no commit or upload.
+
+## Android return flash follow-up - 2026-09-19
+
+6 position tests and Release passed; APK signature verified. Package: `APK/Punctum-0.5.8-return-flash-fix.apk`; SHA256 `04b25fddbc3d521fbd67200dcab0ff34b0317924f5d112e66f487b028d4d36da`. Log: `/tmp/punctum-android-return-flash.log`.
+
+The first return-position patch dismissed detail before the LaunchedEffect scrolled the gallery, allowing the old list position to appear for a frame. Close is now a two-phase handoff: resolve the photo anchor and retain detail, scroll the underlying list, await a frame, then dismiss detail and present any delete confirmation. Repeated back requests are coalesced; empty destinations finish immediately. Existing row-by-URI restoration and user-drag cancellation remain unchanged.
+
+This addresses the observed ordering defect. Frame-level physical-device visual acceptance remains pending; JVM position tests do not establish absence of a flash.
+
+## Android 首次进入图集：可取消加载 · 2026-09-20（当前）
+
+最新包 `APK/Punctum-0.5.8-cancellable-gallery-loading.apk`；SHA256 `4efcaebb93bf7020ad09beff3b5fe05c8236ae9601ff3fd3bbc045a49994162d`。16项回归、Release/Lint与APK签名通过；已保留数据覆盖安装PMX110（安装Success）。证据归档 `docs/verification/2026-09-20/cancellable-gallery-loading/`。
+
+- 开工前核对最新未提交工作树及交接，基于stable-preview版继续，SHA256 76864ba4c6862510c52db72deefdc3b2e7f7486ac1fe00cf792edf311778e2ec。保留系统快速预览、异常比例校正、逐张高清发布及按进入可见范围判断的返回规则；SINGLE_PASS_LIST仍关闭。
+- MainActivity新增独立于隐藏列表层的加载弹窗，提示“项目数量较多，加载中”，提供取消按钮；系统返回/关闭弹窗同样取消。完成数据加载且首行ready后消失，空图集沿用内容ready回调。
+- 缓存JSON读取移至IO线程；首次未缓存图集直接完整加载一次，避免先为4张封面全量扫描排序，再完整读取一次。加载期间暂停周期刷新竞争；已有缓存仍快速展示后后台刷新。
+- 取消后回首页、清空当前展示，保留已添加图集及持久授权。取消entry Job及对应刷新，用generation隔离过期结果；逐张读取中检查协程取消。正在执行的系统提供商单次读取可能需要返回后才停止，界面无需等待它完成。
+- 失败退出加载态并提示重试；不把加载错误伪装成一直等待。实现仅Android，本次不改iOS。版本0.5.8/58；未提交上传。
+- 现有16项回归用于保护返回位置、缓存及预览规则；首次超大图集加载、取消后重进与系统返回的真机流程待用户复测，不能用这些单测替代新流程验收。
+
+## Android 加载提示样式与延迟显示 · 2026-09-20（当前）
+
+最新包 `APK/Punctum-0.5.8-delayed-loading.apk`，SHA256 `46e49e77c218ca5d2f2fc661bafdb29a48ff5dd70c8bdf93b4d9bef489063de8`。16项现有回归、Release/Lint与签名验证通过；已保留数据覆盖安装PMX110（Success）。证据在docs/verification/2026-09-20/delayed-loading/。
+
+- 用户反馈旧AlertDialog文案过大、转圈未居中，快速进入时弹窗闪现。本次改为屏幕中央272dp圆角小卡片，28dp细线加载环、14sp居中文案和13sp取消按钮，保留正常可点击区域。
+- 进入图集后连续等待500ms仍未达到内容ready才显示；500ms内完成不弹。图集切换、完成或取消会取消计时并重置状态，避免旧图集延迟弹出。加载完成立即关闭，不强制最短停留时长，不为展示提示额外阻塞进入。
+- 取消按钮和系统返回保留；提示未出现的前500ms内系统返回也直接取消加载。点击卡片外不意外取消，返回首页保留图集/授权。
+- 保留上一轮可取消加载和最新stable-preview构图修复，SINGLE_PASS_LIST=false。只改Android界面，版本0.5.8/58，未提交上传。样式和快慢图集实际观感待真机反馈。

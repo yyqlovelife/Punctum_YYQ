@@ -41,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -76,6 +77,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.FlowPreview
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+private val LIST_IMAGE_DISPATCHER = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(2)
+
 @Composable
 @OptIn(FlowPreview::class)
 internal fun GalleryScreen(
@@ -89,6 +93,7 @@ internal fun GalleryScreen(
     onSelectPhoto: (Int) -> Unit,
     onDeletePhoto: (Photo) -> Unit,
     onWarmThumbnails: (Int, Int) -> Unit,
+    onPauseThumbnails: () -> Unit,
     onContentReady: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -100,24 +105,33 @@ internal fun GalleryScreen(
         if (!loading && photos.isEmpty()) onContentReady()
     }
 
-    LaunchedEffect(photos, listState) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index } }
-            .map { visible ->
-                if (visible.isEmpty() || photos.isEmpty()) null
-                else {
-                    val firstRow = (visible.minOrNull() ?: 1) - 1
-                    val lastRow = (visible.maxOrNull() ?: 1) - 1
-                    val firstPhoto = (firstRow.coerceAtLeast(0)) * 2
-                    val lastPhoto = ((lastRow.coerceAtLeast(0)) * 2 + 1).coerceAtMost(photos.lastIndex)
-                    firstPhoto to lastPhoto
+    val latestPhotos by rememberUpdatedState(photos)
+    LaunchedEffect(gallery.uri, listState) {
+        if (PhotoStill.SINGLE_PASS_LIST) {
+            // Coil owns visible loading; avoid decoding/compressing the same originals a second time.
+            onPauseThumbnails()
+            return@LaunchedEffect
+        }
+        try {
+            snapshotFlow {
+                if (listState.isScrollInProgress) null
+                else listState.layoutInfo.visibleItemsInfo.map { it.index } to latestPhotos.size
+            }.distinctUntilChanged().collectLatest { viewport ->
+                val visible = viewport?.first
+                onPauseThumbnails()
+                if (!visible.isNullOrEmpty() && latestPhotos.isNotEmpty()) {
+                    // Path-only updates must not restart the worker or its settle delay.
+                    delay(80)
+                    val firstRow = ((visible.minOrNull() ?: 1) - 1).coerceAtLeast(0)
+                    val lastRow = ((visible.maxOrNull() ?: 1) - 1).coerceAtLeast(0)
+                    onWarmThumbnails(firstRow * 2, (lastRow * 2 + 1).coerceAtMost(latestPhotos.lastIndex))
                 }
             }
-            .distinctUntilChanged()
-            .debounce(100)
-            .collectLatest { range ->
-                range?.let { onWarmThumbnails(it.first, it.second) }
-            }
+        } finally {
+            onPauseThumbnails()
+        }
     }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -207,22 +221,43 @@ private fun OriginalRatioRow(
             val aspect = photo.aspectRatio.coerceIn(0.45f, 2.4f)
             val deleteProgress = remember(photo.uri) { Animatable(0f) }
             var showDeleteProgress by remember(photo.uri) { mutableStateOf(false) }
+            // Device QA can replay preview-to-HQ transitions without deleting any caches.
+            var replayPreview by remember(photo.uri) {
+                mutableStateOf(android.util.Log.isLoggable("PunctumPreviewQA", android.util.Log.DEBUG))
+            }
+            LaunchedEffect(photo.uri) {
+                if (replayPreview) { delay(2200); replayPreview = false }
+            }
+            val requestPhoto = if (replayPreview) photo.copy(thumbnailPath = null) else photo
             val imageModel = remember(
                 photo.uri,
-                photo.thumbnailPath,
+                photo.width,
+                photo.height,
+                replayPreview,
+                if (PhotoStill.SINGLE_PASS_LIST) null else photo.thumbnailPath,
+                photo.modifiedMillis,
                 photo.stillImageByteCount,
             ) {
                 val systemThumbnailKey =
-                    "gallery-system-thumb:${photo.uri}:${photo.modifiedMillis}"
-                val highQualityThumbnailKey = photo.thumbnailPath?.let { path ->
-                    "gallery-hq-thumb:${photo.uri}:$path"
+                    "gallery-system-thumb-fit-v3:${photo.uri}:${photo.modifiedMillis}"
+                val highQualityThumbnailKey = requestPhoto.thumbnailPath?.let { path ->
+                    "gallery-hq-thumb-fit-v1:${photo.uri}:$path"
                 }
+                val requestKey = if (PhotoStill.SINGLE_PASS_LIST) {
+                    "gallery-final-thumb-fit-v2:${photo.uri}:${photo.modifiedMillis}"
+                } else highQualityThumbnailKey ?: systemThumbnailKey
                 ImageRequest.Builder(context)
-                    .data(PhotoStill.forList(photo))
-                    .memoryCacheKey(highQualityThumbnailKey ?: systemThumbnailKey)
-                    .diskCacheKey(highQualityThumbnailKey ?: systemThumbnailKey)
-                    .placeholderMemoryCacheKey(systemThumbnailKey)
-                    .size(900)
+                    .data(PhotoStill.forList(requestPhoto))
+                    .memoryCacheKey(requestKey)
+                    .diskCacheKey(requestKey)
+                    .apply {
+                        if (PhotoStill.SINGLE_PASS_LIST) {
+                            fetcherDispatcher(LIST_IMAGE_DISPATCHER)
+                            decoderDispatcher(LIST_IMAGE_DISPATCHER)
+                        } else placeholderMemoryCacheKey(systemThumbnailKey)
+                    }
+                    // AsyncImage resolves the actual measured cell size in physical pixels.
+                    // Keep the 1400px disk thumbnail; only decode to the display's needs.
                     .crossfade(false)
                     .build()
             }
@@ -285,6 +320,12 @@ private fun OriginalRatioRow(
                     animateOnLoad = false,
                     onSuccess = { onPhotoReady(photo) },
                     onError = { onPhotoReady(photo) },
+                    onImageSize = { width, height ->
+                        val tag = "PunctumThumb"
+                        if (android.util.Log.isLoggable(tag, android.util.Log.DEBUG)) {
+                            android.util.Log.d(tag, "geometry id=${photo.uri.hashCode()} stage=${if (imageModel.data is java.io.File) "hq" else "preview"} image=${width}x$height photo=${photo.width}x${photo.height}")
+                        }
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
                 if (showDeleteProgress) {

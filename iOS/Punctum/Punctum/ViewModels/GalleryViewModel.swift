@@ -32,11 +32,13 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private var expectedCoverIDs: [String: [String]] = [:]
     private var deleteTombstones = PhotoDeletionTombstones()
     private var hiddenAssetIDs: [String: Set<String>]
+    private var overviewTasks: [String: Task<Void, Never>] = [:]
+    private var refreshGeneration = 0
     private var refreshTask: Task<Void, Never>?
     private var lastKnownAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     private var galleryLoadGeneration = 0
     private var galleryFetchNextIndex = 0
-    private var galleryFetchExhausted = true
+    @Published private(set) var galleryFetchExhausted = true
     private var isLoadingMorePhotos = false
     private var deletionInFlight = false
 
@@ -197,6 +199,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         library.unpinCaptureOrder()
         detailIndex = nil
         showSwitcher = true
+        refreshAll()
     }
 
     func closeSwitcher() {
@@ -283,11 +286,20 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func confirmPendingDeletion(_ request: PendingPhotoDeletion) {
+        guard !deletionInFlight else { return }
         deletionInFlight = true
+        refreshTask?.cancel()
+        refreshGeneration += 1
+        overviewTasks.values.forEach { $0.cancel() }
+        coverBuildTasks.values.forEach { $0.cancel() }
+        coverBuildTasks.removeAll()
         pendingDeletionRequest = nil
         Task {
             do {
-                defer { deletionInFlight = false }
+                defer {
+                    deletionInFlight = false
+                    scheduleRefresh()
+                }
                 try await library.delete(request.photos)
                 markDeleting(request.photos)
                 let ids = Set(request.photos.map(\.id))
@@ -304,6 +316,18 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 loadCurrentGallery()
             }
         }
+    }
+
+    func commitComparisonDeletion(_ photo: PhotoItem) {
+        markDeleting([photo])
+        var transaction = Transaction(); transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            photos.removeAll { $0.id == photo.id }
+            if photos.isEmpty { detailIndex = nil }
+            else if let detailIndex { self.detailIndex = min(detailIndex, photos.count - 1) }
+        }
+        updateCurrentOverview()
+        for gallery in galleries where gallery.id != currentGalleryID { refreshOverview(for: gallery) }
     }
 
     func deletePhoto(_ photo: PhotoItem) {
@@ -373,7 +397,10 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func refreshAll() {
+        guard !deletionInFlight else { return }
         guard library.authorizationStatus == .authorized || library.authorizationStatus == .limited else { return }
+        refreshGeneration += 1
+        let generation = refreshGeneration
         pruneExpiredTombstones()
         let valid = galleries.filter(library.galleryExists)
         if valid != galleries {
@@ -384,7 +411,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             refreshOverview(for: gallery)
             Task {
                 await library.prepareCaptureOrder(for: gallery)
-                guard galleries.contains(where: { $0.id == gallery.id }) else { return }
+                guard generation == refreshGeneration, !deletionInFlight,
+                      galleries.contains(where: { $0.id == gallery.id }) else { return }
                 refreshOverview(for: gallery)
                 if currentGalleryID == gallery.id, galleryReadyID == gallery.id { loadCurrentGallery() }
             }
@@ -413,6 +441,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         refreshTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, let self else { return }
+            guard !self.deletionInFlight else { return }
             self.refreshAll()
         }
     }
@@ -459,6 +488,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         guard let gallery = currentGallery,
               !isLoading,
               !isLoadingMorePhotos,
+              !deletionInFlight,
+              pendingDeletionRequest == nil,
               !galleryFetchExhausted else { return }
         isLoadingMorePhotos = true
         let generation = galleryLoadGeneration
@@ -497,7 +528,19 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     private func refreshOverview(for gallery: PunctumGallery) {
-        guard var overview = library.overview(for: gallery, excluding: excludedPhotoIDs(for: gallery)) else {
+        overviewTasks[gallery.id]?.cancel()
+        let excluded = excludedPhotoIDs(for: gallery)
+        overviewTasks[gallery.id] = Task { [weak self] in
+            guard let self else { return }
+            let overview = await library.overview(for: gallery, excluding: excluded)
+            guard !Task.isCancelled, galleries.contains(where: { $0.id == gallery.id }) else { return }
+            applyOverview(overview, for: gallery)
+            overviewTasks[gallery.id] = nil
+        }
+    }
+
+    private func applyOverview(_ result: GalleryOverview?, for gallery: PunctumGallery) {
+        guard var overview = result else {
             coverBuildTasks.removeValue(forKey: gallery.id)?.cancel()
             expectedCoverIDs.removeValue(forKey: gallery.id)
             overviews.removeValue(forKey: gallery.id)
@@ -531,6 +574,10 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             return
         }
 
+        // Covers are only visible on the home screen. Do not render/encode them
+        // while the user is scrolling the gallery after a batch deletion.
+        guard currentGalleryID == nil || showSwitcher else { return }
+        if previous?.covers.map(\.id) == coverIDs, coverBuildTasks[gallery.id] != nil { return }
         coverBuildTasks.removeValue(forKey: gallery.id)?.cancel()
         coverBuildTasks[gallery.id] = Task { [weak self] in
             guard let self else { return }

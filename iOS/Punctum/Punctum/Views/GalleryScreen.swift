@@ -235,9 +235,6 @@ private struct PhotoGridCell: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .contentShape(Rectangle())
-        .task(id: photo.id, priority: .utility) {
-            _ = await MetadataService.shared.metadata(for: photo)
-        }
     }
 }
 

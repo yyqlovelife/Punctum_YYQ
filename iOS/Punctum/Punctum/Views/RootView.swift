@@ -65,7 +65,9 @@ struct RootView: View {
                     onClose: model.closeDetail,
                     onMoveInLibrary: model.movePhotoInLibrary,
                     onCommitMove: model.commitMovedPhoto,
-                    onLoadMore: model.loadMorePhotos
+                    hasMorePhotos: !model.galleryFetchExhausted,
+                    onLoadMore: model.loadMorePhotos,
+                    onCommitComparisonDelete: model.commitComparisonDeletion
                 )
                 .opacity(model.detailVisible ? 1 : 0)
                 .allowsHitTesting(model.detailVisible)

@@ -31,8 +31,13 @@ data class PhotoStill(
     val uri: Uri,
     val jpegByteCount: Long? = null,
     val preferThumbnail: Boolean = false,
+    val sourceWidth: Int = 0,
+    val sourceHeight: Int = 0,
 ) {
     companion object {
+        // Trial switch: use one final, display-sized decode instead of replacing a system preview.
+        const val SINGLE_PASS_LIST = false
+
         fun forList(photo: Photo): Any =
             photo.thumbnailPath
                 ?.let(::File)
@@ -40,7 +45,9 @@ data class PhotoStill(
                 ?: PhotoStill(
                     uri = photo.uri,
                     jpegByteCount = photo.stillImageByteCount,
-                    preferThumbnail = true,
+                    preferThumbnail = !SINGLE_PASS_LIST,
+                    sourceWidth = photo.width,
+                    sourceHeight = photo.height,
                 )
 
         fun forDetail(photo: Photo): PhotoStill =
@@ -60,7 +67,14 @@ class PhotoStillFetcher(
     override suspend fun fetch(): FetchResult? {
         val context = options.context
         if (data.preferThumbnail) {
-            systemThumbnail(context, data.uri, options)?.let { bitmap ->
+            systemThumbnail(context, data.uri, options)?.let { systemBitmap ->
+                val bitmap = if (previewAspectMismatch(
+                    systemBitmap.width, systemBitmap.height, data.sourceWidth, data.sourceHeight,
+                )) {
+                    GalleryImageCache.loadOriginalPreview(context, data.uri)?.also {
+                        systemBitmap.recycle()
+                    } ?: systemBitmap
+                } else systemBitmap
                 return DrawableResult(
                     drawable = BitmapDrawable(context.resources, bitmap),
                     isSampled = true,
