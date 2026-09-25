@@ -17,13 +17,8 @@ final class PhotoLibraryService {
         if let task = indexing[gallery.id] { await task.value; return }
         let generation = orderGeneration
         let task = Task { @MainActor in
-            let result = photoResult(for: gallery)
-            var assets: [PHAsset] = []
-            for index in 0..<result.count {
-                guard !Task.isCancelled else { return }
-                assets.append(result.object(at: index))
-                if index.isMultiple(of: 64) { await Task.yield() }
-            }
+            let assets = await Self.fetchAssetsInBackground(for: gallery)
+            guard !Task.isCancelled else { return }
             for (index, asset) in assets.enumerated() {
                 guard !Task.isCancelled else { return }
                 await CaptureDateIndex.shared.prepare(asset)
@@ -66,7 +61,28 @@ final class PhotoLibraryService {
     }
 
     func pinCaptureOrder(for gallery: PunctumGallery) { pinnedOrder[gallery.id] = orderedAssets(for: gallery) }
+    func pinCaptureOrderAsync(for gallery: PunctumGallery) async {
+        if let pinned = pinnedOrder[gallery.id] { pinnedOrder[gallery.id] = pinned; return }
+        if let ordered = captureOrder[gallery.id] { pinnedOrder[gallery.id] = ordered; return }
+        let assets = await Self.fetchAssetsInBackground(for: gallery, priority: .userInitiated)
+        guard !Task.isCancelled else { return }
+        pinnedOrder[gallery.id] = assets
+    }
     func unpinCaptureOrder() { pinnedOrder.removeAll() }
+
+    nonisolated private static func fetchAssetsInBackground(
+        for gallery: PunctumGallery, priority: TaskPriority = .utility
+    ) async -> [PHAsset] {
+        await Task.detached(priority: priority) {
+            let result = Self.backgroundPhotoResult(for: gallery)
+            var items: [PHAsset] = []
+            result.enumerateObjects { asset, _, stop in
+                if Task.isCancelled { stop.pointee = true; return }
+                items.append(asset)
+            }
+            return items
+        }.value
+    }
 
     func invalidateCaptureOrder() {
         orderGeneration += 1
@@ -222,11 +238,28 @@ final class PhotoLibraryService {
         return localIdentifiers.compactMap { byID[$0] }
     }
 
+    func photoItemsAsync(localIdentifiers: [String]) async -> [PhotoItem] {
+        guard !localIdentifiers.isEmpty else { return [] }
+        return await Task.detached(priority: .utility) {
+            let result = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
+            var byID: [String: PhotoItem] = [:]
+            result.enumerateObjects { asset, _, _ in
+                byID[asset.localIdentifier] = PhotoItem(asset: asset, name: "Photo")
+            }
+            return localIdentifiers.compactMap { byID[$0] }
+        }.value
+    }
+
     func overview(
         for gallery: PunctumGallery,
         excluding excludedIDs: Set<String> = []
     ) async -> GalleryOverview? {
-        let assets = orderedAssets(for: gallery)
+        let assets: [PHAsset]
+        if let ordered = pinnedOrder[gallery.id] ?? captureOrder[gallery.id] {
+            assets = ordered
+        } else {
+            assets = await Self.fetchAssetsInBackground(for: gallery)
+        }
         var count = 0
         var oldest: Date?
         var newest: Date?
@@ -448,6 +481,36 @@ final class PhotoLibraryService {
             return fetchAllImages(limit: limit)
         }
         return PHAsset.fetchAssets(withLocalIdentifiers: [], options: nil)
+    }
+
+    // Initial home refresh must not make PhotoKit resolve a large collection on the UI actor.
+    nonisolated private static func backgroundPhotoResult(for gallery: PunctumGallery) -> PHFetchResult<PHAsset> {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        options.includeHiddenAssets = false
+        options.sortDescriptors = [
+            NSSortDescriptor(key: "creationDate", ascending: false),
+            NSSortDescriptor(key: "modificationDate", ascending: false),
+        ]
+        let stored = PHAssetCollection.fetchAssetCollections(
+            withLocalIdentifiers: [gallery.id], options: nil
+        ).firstObject
+        let storedResult = stored.map { PHAsset.fetchAssets(in: $0, options: options) }
+        let wantsLibrary = gallery.displayName.compare("Recents", options: .caseInsensitive) == .orderedSame
+            || stored?.assetCollectionSubtype == .smartAlbumUserLibrary
+            || stored?.assetCollectionSubtype == .smartAlbumRecentlyAdded
+        if let storedResult, storedResult.count > 0 { return storedResult }
+        if wantsLibrary {
+            let library = PHAssetCollection.fetchAssetCollections(
+                with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil
+            ).firstObject
+            if let library {
+                let result = PHAsset.fetchAssets(in: library, options: options)
+                if result.count > 0 { return result }
+            }
+            return PHAsset.fetchAssets(with: .image, options: options)
+        }
+        return storedResult ?? PHAsset.fetchAssets(withLocalIdentifiers: [], options: nil)
     }
 
     private func isLibraryGallery(_ gallery: PunctumGallery, _ collection: PHAssetCollection) -> Bool {

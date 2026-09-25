@@ -9,16 +9,35 @@ final class CaptureDateIndex {
     static let shared = CaptureDateIndex()
     struct Entry: Codable { let modification: Date?; let capture: Date }
     private var saveTask: Task<Void, Never>?
+    private var loadTask: Task<[String: Entry], Never>?
+    private var didLoad = false
     private var entries: [String: Entry] = [:]
     private let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("capture-dates-v1.json")
-    private init() {
-        if let data = try? Data(contentsOf: url), let saved = try? JSONDecoder().decode([String: Entry].self, from: data) { entries = saved }
+    private init() {}
+    func loadIfNeeded() async {
+        if didLoad { return }
+        if loadTask == nil {
+            let source = url
+            loadTask = Task.detached(priority: .utility) {
+                guard let data = try? Data(contentsOf: source),
+                      let saved = try? JSONDecoder().decode([String: Entry].self, from: data) else { return [:] }
+                return saved
+            }
+        }
+        guard let loadTask else { return }
+        let saved = await loadTask.value
+        if !didLoad {
+            entries = saved.merging(entries) { _, current in current }
+            didLoad = true
+        }
+        self.loadTask = nil
     }
     func date(for asset: PHAsset) -> Date {
         if let cached = entries[asset.localIdentifier], cached.modification == asset.modificationDate { return cached.capture }
         return asset.creationDate ?? asset.modificationDate ?? .distantPast
     }
     func prepare(_ asset: PHAsset) async {
+        await loadIfNeeded()
         if let cached = entries[asset.localIdentifier], cached.modification == asset.modificationDate { return }
         let input: PHContentEditingInput? = await withCheckedContinuation { continuation in
             let options = PHContentEditingInputRequestOptions()

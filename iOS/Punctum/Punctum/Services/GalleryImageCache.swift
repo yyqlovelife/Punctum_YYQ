@@ -15,7 +15,6 @@ final class GalleryImageCache {
 
     private let manager = PHCachingImageManager()
     private let fileManager = FileManager.default
-    private let coverSize = CGSize(width: 900, height: 900)
     private let ticketSize = CGSize(width: 1_400, height: 1_400)
 
     private lazy var cacheDirectory: URL = {
@@ -40,14 +39,18 @@ final class GalleryImageCache {
         let ticketURL = cacheDirectory.appendingPathComponent("\(key)-ticket.jpg")
 
         let ticketImage: UIImage?
-        if fileManager.fileExists(atPath: ticketURL.path) {
+        let hasTicket = fileManager.fileExists(atPath: ticketURL.path)
+        if hasTicket {
             ticketImage = UIImage(contentsOfFile: ticketURL.path)
         } else {
             ticketImage = await requestImage(for: first.asset, targetSize: ticketSize)
-            if let data = ticketImage?.jpegData(compressionQuality: 0.91) {
+        }
+        let ticketColor = await Task.detached(priority: .utility) {
+            if !hasTicket, let data = ticketImage?.jpegData(compressionQuality: 0.91) {
                 try? data.write(to: ticketURL, options: .atomic)
             }
-        }
+            return ticketImage.flatMap(Self.dominantColorARGB)
+        }.value
 
         if !fileManager.fileExists(atPath: postcardURL.path) {
             var images: [UIImage] = []
@@ -59,16 +62,18 @@ final class GalleryImageCache {
                     images.append(image)
                 }
             }
-            if let collage = makePostcardCollage(images: images),
-               let data = collage.jpegData(compressionQuality: 0.92) {
-                try? data.write(to: postcardURL, options: .atomic)
-            }
+            await Task.detached(priority: .utility) {
+                if let collage = Self.makePostcardCollage(images: images),
+                   let data = collage.jpegData(compressionQuality: 0.92) {
+                    try? data.write(to: postcardURL, options: .atomic)
+                }
+            }.value
         }
 
         return GalleryCoverAssets(
             postcardCoverPath: validPath(postcardURL),
             ticketCoverPath: validPath(ticketURL),
-            ticketDominantColorARGB: ticketImage.flatMap(dominantColorARGB),
+            ticketDominantColorARGB: ticketColor,
             ticketColorVersion: Self.ticketColorVersion
         )
     }
@@ -110,8 +115,9 @@ final class GalleryImageCache {
         return options
     }
 
-    private func makePostcardCollage(images: [UIImage]) -> UIImage? {
+    nonisolated private static func makePostcardCollage(images: [UIImage]) -> UIImage? {
         guard let first = images.first else { return nil }
+        let coverSize = CGSize(width: 900, height: 900)
         let renderer = UIGraphicsImageRenderer(size: coverSize)
         return renderer.image { context in
             UIColor(red: 21 / 255, green: 17 / 255, blue: 14 / 255, alpha: 1).setFill()
@@ -120,7 +126,7 @@ final class GalleryImageCache {
             let pad: CGFloat = 34
             let gap: CGFloat = 28
             if images.count < 4 {
-                drawCenterCrop(
+                Self.drawCenterCrop(
                     first,
                     in: CGRect(
                         x: pad,
@@ -139,13 +145,13 @@ final class GalleryImageCache {
                     CGRect(x: pad + cell + gap, y: pad + cell + gap, width: cell, height: cell),
                 ]
                 for (image, rect) in zip(images.prefix(4), rects) {
-                    drawCenterCrop(image, in: rect, context: context.cgContext)
+                    Self.drawCenterCrop(image, in: rect, context: context.cgContext)
                 }
             }
         }
     }
 
-    private func drawCenterCrop(_ image: UIImage, in rect: CGRect, context: CGContext) {
+    nonisolated private static func drawCenterCrop(_ image: UIImage, in rect: CGRect, context: CGContext) {
         guard image.size.width > 0, image.size.height > 0 else { return }
         let scale = max(rect.width / image.size.width, rect.height / image.size.height)
         let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
@@ -161,7 +167,7 @@ final class GalleryImageCache {
         context.restoreGState()
     }
 
-    private func dominantColorARGB(_ image: UIImage) -> UInt32? {
+    nonisolated private static func dominantColorARGB(_ image: UIImage) -> UInt32? {
         guard let cgImage = image.cgImage else { return nil }
         let width = 128
         let height = 128

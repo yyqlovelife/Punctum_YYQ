@@ -1,8 +1,14 @@
 # Punctum for iOS
 
-Latest handoff (2026-09-20): [session status](../../SESSION_HANDOFF_2026-09-20.md). Latest IPA: `iOS/IPA/Punctum-0.5.9-unsigned.ipa` (path from repository root), 41 tests passed; physical-device acceptance remains pending. Earlier package references below are historical.
+Local update (2026-09-25): returning from detail now keeps the gallery scroll position when the final photo was visible at entry; otherwise it centers that photo's two-column row before detail disappears. Latest local IPA: `iOS/IPA/Punctum-0.5.9-return-center-unsigned.ipa` (from repository root). Version remains 0.5.9/59; device validation is pending.
 
-Native SwiftUI / UIKit edition of Punctum · 观止. Current version: **0.5.9 (build 59)**, updated 2026-09-20. Minimum deployment target: **iOS 17**. Bundle identifier: `com.chessyyq.punctum`.
+Earlier local follow-up (2026-09-25): cached cover asset IDs restore home images even when generated cover files are gone; opening a gallery shows its loading state immediately while the initial photo order is fetched in the background. Earlier IPA: `iOS/IPA/Punctum-0.5.9-cover-entry-fix-unsigned.ipa` (from repository root).
+
+Earlier local update (2026-09-25): cold launch displays saved home cards before refreshing Photos. Date-index loading, collection validation, asset enumeration, cover rendering and cache writes run in the background; gallery refreshes proceed one at a time. Earlier IPA: `iOS/IPA/Punctum-0.5.9-fast-launch-unsigned.ipa` (repository root).
+
+Prior handoff (2026-09-20): [session status](../../SESSION_HANDOFF_2026-09-20.md). Release IPA at that time: `iOS/IPA/Punctum-0.5.9-unsigned.ipa` (path from repository root), 41 tests passed; physical-device acceptance remains pending. Earlier package references below are historical.
+
+Native SwiftUI / UIKit edition of Punctum · 观止. Current version: **0.5.9 (build 59)**, updated 2026-09-25. Minimum deployment target: **iOS 17**. Bundle identifier: `com.chessyyq.punctum`.
 
 ## Current experience
 
@@ -35,11 +41,11 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 scripts/build-unsigned-ipa.sh
 ```
 
-The packaging script writes `../IPA/Punctum-0.5.8-unsigned.ipa`. The current local trial delivery is `Punctum-0.5.8-comparison-unsigned.ipa`; the earlier `native-delete-280ms` package predates persistent zoom. Do not run concurrent xcodebuild jobs against one DerivedData directory.
+The packaging script writes an unsigned IPA under `../IPA/`. The latest local delivery is `Punctum-0.5.9-return-center-unsigned.ipa`; earlier filenames in the changelog are historical. Do not run concurrent xcodebuild jobs against one DerivedData directory.
 
 ## Verification and distribution
 
-The current regression run passed 35 tests, including 7 comparison tests; the Release build and IPA integrity/version checks passed. Simulator checks confirmed portrait/landscape layout and original-size edge paging. Comparison UI verification was blocked by the locked Mac; physical multi-touch and system deletion acceptance are pending; see `design-qa.md`. Tests cover models, EXIF dates, decoding, layout, tap travel and motion continuity, not physical frame rate. User confirmation covers native deletion feel and timing; other interaction combinations retain their own verification status.
+The latest regression run passed 43 tests; Release, IPA integrity and bundled 0.5.9/59 checks passed. The user confirmed that the cold-launch home screen can scroll freely. Cover restoration, gallery entry and return positioning still need iPhone validation; see `changelog/ios.md` and `PUNCTUM_HANDOFF.md`. The tests do not establish physical frame rate or gesture acceptance.
 
 Use AltStore / AltServer to sign the unsigned IPA, preserving the existing Apple account/app identity for an overlay install. Simulator builds cannot run on an iPhone. Signing certificates, provisioning profiles and credentials stay outside Git. Android resources referenced by this project are included in the repository; clone the full repository when moving machines.
 

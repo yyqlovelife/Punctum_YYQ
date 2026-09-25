@@ -13,8 +13,11 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published var showAlbumPicker = false
     @Published var detailIndex: Int?
     @Published var detailVisible = false
+    @Published private(set) var galleryReturnTargetID: String?
     @Published var galleryReadyID: String?
     private var detailSession = UUID()
+    private var detailEntryVisibleIDs: Set<String> = []
+    private var pendingDetailClosePhotos: [PhotoItem] = []
     @Published private(set) var detailInitialMetadata: PhotoMetadata?
     @Published var invitationStyle: InvitationCardStyle
     @Published var permissionMessage: String?
@@ -28,13 +31,16 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private let library: PhotoLibraryService
     private let imageCache: GalleryImageCache
     private var overviewSnapshots: [String: GalleryOverviewSnapshot]
+    private var snapshotSaveTask: Task<Void, Never>?
     private var coverBuildTasks: [String: Task<Void, Never>] = [:]
     private var expectedCoverIDs: [String: [String]] = [:]
     private var deleteTombstones = PhotoDeletionTombstones()
     private var hiddenAssetIDs: [String: Set<String>]
     private var overviewTasks: [String: Task<Void, Never>] = [:]
     private var refreshGeneration = 0
+    private var allRefreshTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
+    private var gallerySelectionTask: Task<Void, Never>?
     private var lastKnownAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     private var galleryLoadGeneration = 0
     private var galleryFetchNextIndex = 0
@@ -74,16 +80,18 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
         PHPhotoLibrary.shared().register(self)
         hydrateOverviewSnapshots()
-        refreshAll()
         Task { [weak self] in
             guard let self else { return }
+            // Give the cached home screen a frame before starting Photos work.
+            try? await Task.sleep(for: .milliseconds(100))
             if self.library.authorizationStatus == .notDetermined {
                 _ = await self.library.requestAuthorization()
+                self.hydrateOverviewSnapshots()
             }
-            self.hydrateOverviewSnapshots()
+            Task { [weak self] in await self?.hydrateCachedCovers() }
+            await CaptureDateIndex.shared.loadIfNeeded()
             self.refreshAll()
             await LivePhotoSeeder.seedIfNeeded()
-            self.refreshAll()
         }
         if ProcessInfo.processInfo.arguments.contains("-openFirstGallery") {
             DispatchQueue.main.async { [weak self] in
@@ -177,25 +185,32 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func selectGallery(_ id: String) {
-        guard galleries.contains(where: { $0.id == id }) else { return }
+        guard let gallery = galleries.first(where: { $0.id == id }) else { return }
+        gallerySelectionTask?.cancel()
         library.unpinCaptureOrder()
         let switching = currentGalleryID != id
         currentGalleryID = id
         showSwitcher = false
-        galleryReadyID = nil
+        galleryReadyID = id
         detailIndex = nil
         if switching {
             photos = []
             isLoading = true
         }
-        // Navigation must never await EXIF enumeration or an iCloud image request.
-        // Freeze the current order for this gallery visit, including subsequent pages.
-        if let gallery = currentGallery { library.pinCaptureOrder(for: gallery) }
-        loadCurrentGallery()
-        galleryReadyID = id
+        gallerySelectionTask = Task { [weak self] in
+            // Let the pressed card release and the gallery loading state render first.
+            try? await Task.sleep(for: .milliseconds(20))
+            guard let self, !Task.isCancelled else { return }
+            await self.library.pinCaptureOrderAsync(for: gallery)
+            guard !Task.isCancelled, self.currentGalleryID == id, !self.showSwitcher else { return }
+            self.gallerySelectionTask = nil
+            self.loadCurrentGallery()
+        }
     }
 
     func openSwitcher() {
+        gallerySelectionTask?.cancel()
+        gallerySelectionTask = nil
         library.unpinCaptureOrder()
         detailIndex = nil
         showSwitcher = true
@@ -235,6 +250,9 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         overviewSnapshots.removeValue(forKey: removed.id)
         overviews.removeValue(forKey: removed.id)
         if currentGalleryID == removed.id {
+            gallerySelectionTask?.cancel()
+            gallerySelectionTask = nil
+            library.unpinCaptureOrder()
             currentGalleryID = nil
             photos = []
             detailIndex = nil
@@ -244,9 +262,11 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         store.saveOverviewSnapshots(overviewSnapshots)
     }
 
-    func openDetail(at index: Int, metadata: PhotoMetadata) {
+    func openDetail(at index: Int, metadata: PhotoMetadata, entryVisibleIDs: Set<String> = []) {
         guard photos.indices.contains(index) else { return }
         if let gallery = currentGallery { library.pinCaptureOrder(for: gallery) }
+        detailEntryVisibleIDs = entryVisibleIDs.isEmpty ? [photos[index].id] : entryVisibleIDs
+        galleryReturnTargetID = nil
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
@@ -257,8 +277,37 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
     }
 
-    func closeDetail(pendingPhotos: [PhotoItem] = []) {
+    func closeDetail(pendingPhotos: [PhotoItem], viewedID: String?, fallbackIndex: Int) {
         guard detailVisible else { return }
+        let targetID = GalleryReturnPosition.targetID(
+            ids: photos.map(\.id), viewedID: viewedID, fallbackIndex: fallbackIndex,
+            excluding: Set(pendingPhotos.map(\.id))
+        )
+        if let targetID,
+           GalleryReturnPosition.shouldCenter(targetID, entryVisibleIDs: detailEntryVisibleIDs) {
+            pendingDetailClosePhotos = pendingPhotos
+            galleryReturnTargetID = targetID
+            let session = detailSession
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard let self, self.detailSession == session,
+                      self.galleryReturnTargetID == targetID else { return }
+                self.finishGalleryReturnPositioning(targetID)
+            }
+            return
+        }
+        beginDismissingDetail(pendingPhotos: pendingPhotos)
+    }
+
+    func finishGalleryReturnPositioning(_ targetID: String) {
+        guard galleryReturnTargetID == targetID else { return }
+        galleryReturnTargetID = nil
+        let pendingPhotos = pendingDetailClosePhotos
+        pendingDetailClosePhotos = []
+        beginDismissingDetail(pendingPhotos: pendingPhotos)
+    }
+
+    private func beginDismissingDetail(pendingPhotos: [PhotoItem]) {
         detailVisible = false
         let session = detailSession
         Task {
@@ -274,6 +323,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         // Keep the gallery visit snapshot after returning from detail.
         detailIndex = nil
         detailInitialMetadata = nil
+        detailEntryVisibleIDs = []
         guard !pendingPhotos.isEmpty else { return }
 
         var seen = Set<String>()
@@ -401,23 +451,39 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         guard library.authorizationStatus == .authorized || library.authorizationStatus == .limited else { return }
         refreshGeneration += 1
         let generation = refreshGeneration
+        allRefreshTask?.cancel()
         pruneExpiredTombstones()
-        let valid = galleries.filter(library.galleryExists)
-        if valid != galleries {
-            galleries = valid
-            persistGalleries()
-        }
-        for gallery in galleries {
-            refreshOverview(for: gallery)
-            Task {
+        if currentGallery != nil, !showSwitcher, gallerySelectionTask == nil { loadCurrentGallery() }
+        let candidates = galleries
+        allRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            await CaptureDateIndex.shared.loadIfNeeded()
+            let validIDs = await Task.detached(priority: .utility) {
+                Set(candidates.compactMap { gallery in
+                    PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [gallery.id], options: nil).firstObject == nil
+                        ? nil : gallery.id
+                })
+            }.value
+            guard !Task.isCancelled, generation == refreshGeneration else { return }
+            let candidateIDs = Set(candidates.map(\.id))
+            let valid = galleries.filter { !candidateIDs.contains($0.id) || validIDs.contains($0.id) }
+            if valid != galleries {
+                galleries = valid
+                persistGalleries()
+            }
+            for gallery in galleries {
+                guard !Task.isCancelled, generation == refreshGeneration, !deletionInFlight else { return }
+                if overviews[gallery.id]?.postcardCoverPath == nil
+                    || overviews[gallery.id]?.ticketCoverPath == nil {
+                    refreshOverview(for: gallery)
+                }
                 await library.prepareCaptureOrder(for: gallery)
-                guard generation == refreshGeneration, !deletionInFlight,
-                      galleries.contains(where: { $0.id == gallery.id }) else { return }
+                guard !Task.isCancelled, generation == refreshGeneration, !deletionInFlight else { return }
                 refreshOverview(for: gallery)
-                if currentGalleryID == gallery.id, galleryReadyID == gallery.id { loadCurrentGallery() }
+                if currentGalleryID == gallery.id, !showSwitcher, gallerySelectionTask == nil { loadCurrentGallery() }
+                await Task.yield()
             }
         }
-        if currentGallery != nil { loadCurrentGallery() }
     }
 
     func appDidBecomeActive() {
@@ -549,17 +615,24 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
         let coverIDs = overview.covers.map(\.id)
         let previous = overviews[gallery.id]
-        let canReuseAssets = previous?.covers.map(\.id) == coverIDs
-            && imageCache.isValidCacheFile(previous?.postcardCoverPath)
-            && imageCache.isValidCacheFile(previous?.ticketCoverPath)
-            && previous?.ticketDominantColorARGB != nil
-            && previous?.ticketColorVersion == GalleryImageCache.ticketColorVersion
+        let cached = overviewSnapshots[gallery.id]
+        let usePrevious = previous?.covers.isEmpty == false
+        let cachedIDs = usePrevious ? previous?.covers.map(\.id) : cached?.coverAssetIDs
+        let cachedPostcard = usePrevious ? previous?.postcardCoverPath : cached?.postcardCoverPath
+        let cachedTicket = usePrevious ? previous?.ticketCoverPath : cached?.ticketCoverPath
+        let cachedColor = usePrevious ? previous?.ticketDominantColorARGB : cached?.ticketDominantColorARGB
+        let cachedVersion = usePrevious ? previous?.ticketColorVersion : cached?.ticketColorVersion
+        let canReuseAssets = cachedIDs == coverIDs
+            && imageCache.isValidCacheFile(cachedPostcard)
+            && imageCache.isValidCacheFile(cachedTicket)
+            && cachedColor != nil
+            && cachedVersion == GalleryImageCache.ticketColorVersion
 
-        if canReuseAssets, let previous {
-            overview.postcardCoverPath = previous.postcardCoverPath
-            overview.ticketCoverPath = previous.ticketCoverPath
-            overview.ticketDominantColorARGB = previous.ticketDominantColorARGB
-            overview.ticketColorVersion = previous.ticketColorVersion
+        if canReuseAssets {
+            overview.postcardCoverPath = cachedPostcard
+            overview.ticketCoverPath = cachedTicket
+            overview.ticketDominantColorARGB = cachedColor
+            overview.ticketColorVersion = GalleryImageCache.ticketColorVersion
         }
         overviews[gallery.id] = overview
         expectedCoverIDs[gallery.id] = coverIDs
@@ -656,14 +729,12 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         guard library.authorizationStatus == .authorized || library.authorizationStatus == .limited else { return }
         for gallery in galleries {
             guard let snapshot = overviewSnapshots[gallery.id] else { continue }
-            let covers = library.photoItems(localIdentifiers: snapshot.coverAssetIDs)
-            guard covers.map(\.id) == snapshot.coverAssetIDs else { continue }
             let validColor = snapshot.ticketColorVersion == GalleryImageCache.ticketColorVersion
             overviews[gallery.id] = GalleryOverview(
                 gallery: gallery,
                 count: snapshot.count,
                 timeSpan: snapshot.timeSpan,
-                covers: covers,
+                covers: [],
                 postcardCoverPath: imageCache.isValidCacheFile(snapshot.postcardCoverPath)
                     ? snapshot.postcardCoverPath : nil,
                 ticketCoverPath: imageCache.isValidCacheFile(snapshot.ticketCoverPath)
@@ -674,12 +745,42 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         }
     }
 
+    private func hydrateCachedCovers() async {
+        guard library.authorizationStatus == .authorized || library.authorizationStatus == .limited else { return }
+        for gallery in galleries {
+            guard let snapshot = overviewSnapshots[gallery.id], !snapshot.coverAssetIDs.isEmpty else { continue }
+            let covers = await library.photoItemsAsync(localIdentifiers: snapshot.coverAssetIDs)
+            guard !Task.isCancelled,
+                  overviewSnapshots[gallery.id]?.coverAssetIDs == snapshot.coverAssetIDs,
+                  var current = overviews[gallery.id], current.covers.isEmpty else { continue }
+            guard covers.map(\.id) == snapshot.coverAssetIDs else {
+                refreshOverview(for: gallery)
+                continue
+            }
+            current.covers = covers
+            overviews[gallery.id] = current
+            if current.postcardCoverPath == nil || current.ticketCoverPath == nil {
+                applyOverview(current, for: gallery)
+            }
+            await Task.yield()
+        }
+    }
+
     private func saveSnapshot(for overview: GalleryOverview) {
+        let previous = overviewSnapshots[overview.gallery.id]
+        let coverIDs = overview.covers.map(\.id)
+        if previous?.count == overview.count,
+           previous?.timeSpan == overview.timeSpan,
+           previous?.coverAssetIDs == coverIDs,
+           previous?.postcardCoverPath == overview.postcardCoverPath,
+           previous?.ticketCoverPath == overview.ticketCoverPath,
+           previous?.ticketDominantColorARGB == overview.ticketDominantColorARGB,
+           previous?.ticketColorVersion == overview.ticketColorVersion { return }
         let snapshot = GalleryOverviewSnapshot(
             galleryID: overview.gallery.id,
             count: overview.count,
             timeSpan: overview.timeSpan,
-            coverAssetIDs: overview.covers.map(\.id),
+            coverAssetIDs: coverIDs,
             postcardCoverPath: overview.postcardCoverPath,
             ticketCoverPath: overview.ticketCoverPath,
             ticketDominantColorARGB: overview.ticketDominantColorARGB,
@@ -687,7 +788,13 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             updatedAt: Date()
         )
         overviewSnapshots[overview.gallery.id] = snapshot
-        store.saveOverviewSnapshots(overviewSnapshots)
+        let snapshots = overviewSnapshots
+        let previousSave = snapshotSaveTask
+        let store = store
+        snapshotSaveTask = Task.detached(priority: .utility) {
+            await previousSave?.value
+            store.saveOverviewSnapshots(snapshots)
+        }
     }
 
     private static let homeSubtitles = [

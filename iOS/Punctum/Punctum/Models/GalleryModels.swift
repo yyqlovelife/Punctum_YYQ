@@ -35,7 +35,7 @@ struct GalleryOverview: Identifiable {
     let gallery: PunctumGallery
     let count: Int
     let timeSpan: String
-    let covers: [PhotoItem]
+    var covers: [PhotoItem]
     var postcardCoverPath: String? = nil
     var ticketCoverPath: String? = nil
     var ticketDominantColorARGB: UInt32? = nil
@@ -91,6 +91,33 @@ struct PhotoItem: Identifiable, Hashable {
         lhs.id == rhs.id && lhs.width == rhs.width && lhs.height == rhs.height
     }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+enum GalleryReturnPosition {
+    static func targetID(
+        ids: [String], viewedID: String?, fallbackIndex: Int, excluding: Set<String>
+    ) -> String? {
+        if let viewedID, ids.contains(viewedID), !excluding.contains(viewedID) { return viewedID }
+        let origin = viewedID.flatMap { ids.firstIndex(of: $0) } ?? max(fallbackIndex, 0)
+        if origin < ids.count, let next = ids[origin...].first(where: { !excluding.contains($0) }) {
+            return next
+        }
+        return ids.prefix(origin).last(where: { !excluding.contains($0) })
+    }
+
+    static func shouldCenter(_ photoID: String?, entryVisibleIDs: Set<String>) -> Bool {
+        guard let photoID else { return false }
+        return !entryVisibleIDs.contains(photoID)
+    }
+
+    static func visibleIndices(
+        rowFrames: [Int: CGRect], viewport: CGRect, photoCount: Int
+    ) -> Set<Int> {
+        Set(rowFrames.flatMap { start, frame -> [Int] in
+            guard frame.intersects(viewport), start >= 0, start < photoCount else { return [] }
+            return Array(start..<min(start + 2, photoCount))
+        })
+    }
 }
 
 struct PendingPhotoDeletion: Identifiable {

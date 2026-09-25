@@ -1,6 +1,12 @@
 # Punctum 更新说明
 
-## 当前发布与接续 · 2026-09-20
+## 当前交接状态 · 2026-09-25（未升版本）
+
+- **iOS 0.5.9 / 59**：冷启动先显示已保存的首页概览，照片索引与图集刷新移到后台；修复封面黑屏和点击图集短暂停顿；大图返回列表时，仍在进入前可见范围的照片保持原位置，浏览到范围外的照片所在行居中。43 项 XCTest 与 Release 构建通过。冷启动首页可滑动已获用户确认，其余最新交互待 iPhone 真机复测。最新本地 IPA：`iOS/IPA/Punctum-0.5.9-return-center-unsigned.ipa`。
+- **Android 0.5.8 / 58**：系统相册批量编辑、调整拍摄时间后的图集排序现在由完整扫描一次更新，当前系统时间覆盖旧缓存。19 项单测、Release、Lint、签名检查通过；用户远程安装后反馈暂时状态不错。最新本地 APK：`APK/Punctum-0.5.8-sort-stability.apk`，另有 Google Drive 副本。
+- 详细说明见 [Android](changelog/android.md)、[iOS](changelog/ios.md) 更新记录和 [开发交接](PUNCTUM_HANDOFF.md)。安装包、签名资料与含用户照片的日志不进入 GitHub。
+
+## 上次发布记录 · 2026-09-20
 
 源码与文档已上传GitHub main，首个发布提交 `7d8e74580d9d73f1545e381254923d4bfda93db5`；远端文件树已与本地逐项核对一致。iOS 0.5.9/59重新运行41项XCTest全部通过。此记录取代下方历史“未提交上传”状态。
 

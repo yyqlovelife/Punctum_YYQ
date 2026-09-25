@@ -7,7 +7,7 @@ struct DetailScreen: View {
     let startIndex: Int
     let initialMetadata: PhotoMetadata?
     let currentGalleryID: String
-    let onClose: ([PhotoItem]) -> Void
+    let onClose: ([PhotoItem], String?, Int) -> Void
     let onMoveInLibrary: (PhotoItem, AlbumOption) async throws -> Void
     let onCommitMove: (PhotoItem, AlbumOption) -> Void
     let hasMorePhotos: Bool
@@ -52,7 +52,7 @@ struct DetailScreen: View {
         startIndex: Int,
         initialMetadata: PhotoMetadata? = nil,
         currentGalleryID: String,
-        onClose: @escaping ([PhotoItem]) -> Void,
+        onClose: @escaping ([PhotoItem], String?, Int) -> Void,
         onMoveInLibrary: @escaping (PhotoItem, AlbumOption) async throws -> Void,
         onCommitMove: @escaping (PhotoItem, AlbumOption) -> Void,
         hasMorePhotos: Bool = false,
@@ -600,7 +600,7 @@ struct DetailScreen: View {
     private func closeDetail() {
         guard !closing else { return }
         closing = true
-        onClose(pendingDeletedPhotos)
+        onClose(pendingDeletedPhotos, currentPhoto?.id ?? selectedPhotoID, currentIndex)
     }
 
     private func showMessage(_ text: String, duration: Duration = .seconds(2.4)) {

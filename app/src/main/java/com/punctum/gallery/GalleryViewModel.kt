@@ -183,10 +183,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         dataRefreshJob = viewModelScope.launch {
             delay(250)
             if (galleryEntryJob?.isActive == true) return@launch
-            refreshOverviews(force = true)
-            currentUri?.let { uriKey ->
-                refreshPhotos(uriKey, replaceVisible = false, cached = photoCache[uriKey].orEmpty())
-            }
+            val uriKey = currentUri
+            if (uriKey == null) refreshOverviews(force = true)
+            else refreshPhotos(uriKey, cached = photoCache[uriKey].orEmpty())
         }
     }
 
@@ -295,7 +294,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                 loadingPhotos = false
                 store.savePhotoCache(uriKey, visible)
                 cacheOverview(uriKey, visible)
-                if (cached.isNotEmpty()) refreshPhotos(uriKey, replaceVisible = false, cached = visible)
+                if (cached.isNotEmpty()) refreshPhotos(uriKey, cached = visible)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -310,46 +309,25 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun refreshPhotos(uriKey: String, replaceVisible: Boolean, cached: List<Photo> = photoCache[uriKey].orEmpty()) {
+    private fun refreshPhotos(uriKey: String, cached: List<Photo> = photoCache[uriKey].orEmpty()) {
         if (photoRefreshJobs[uriKey]?.isActive == true) return
         photoRefreshJobs[uriKey] = viewModelScope.launch {
             val gallery = galleries.firstOrNull { it.uri.toString() == uriKey } ?: return@launch
             val currentCached = photoCache[uriKey] ?: cached
-            val latestPhotos = visiblePhotosForGallery(
-                uriKey,
-                PhotoRepository.loadLatestPhotos(getApplication(), gallery, currentCached),
-            )
-            val latestIdentities = latestPhotos.map(::photoFileIdentity).toSet()
-            val quickList = visiblePhotosForGallery(
-                uriKey,
-                (
-                    latestPhotos +
-                        currentCached.filterNot { photoFileIdentity(it) in latestIdentities }
-                    ).sortedWith(PHOTO_NEWEST_FIRST),
-            )
-            if (quickList != currentCached) {
-                val mergedQuick = mergePhotoLists(currentCached, quickList)
-                photoCache[uriKey] = mergedQuick
-                store.savePhotoCache(uriKey, mergedQuick)
-                if (currentUri == uriKey && !isVisiblePhotoListFrozen()) {
-                    photos = mergePhotoLists(photos, mergedQuick)
-                    if (mergedQuick.isNotEmpty()) loadingPhotos = false
-                }
-            }
             val list = visiblePhotosForGallery(
                 uriKey,
-                PhotoRepository.loadPhotos(getApplication(), gallery.uri, quickList),
+                PhotoRepository.loadPhotos(getApplication(), gallery.uri, currentCached),
             )
-            val merged = mergePhotoLists(photoCache[uriKey].orEmpty(), list)
+            val merged = mergePhotoLists(currentCached, list)
             photoCache[uriKey] = merged
             store.savePhotoCache(uriKey, merged)
-            cacheOverview(uriKey, merged)
             if (currentUri == uriKey) {
-                if (!isVisiblePhotoListFrozen() && (replaceVisible || photos != merged)) {
+                if (!isVisiblePhotoListFrozen() && photos != merged) {
                     photos = mergePhotoLists(photos, merged)
                 }
                 loadingPhotos = false
             }
+            cacheOverview(uriKey, merged)
         }
     }
 
@@ -696,20 +674,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun mergePhotoLists(current: List<Photo>, incoming: List<Photo>): List<Photo> {
-        if (current.isEmpty()) return incoming
-        val currentByUri = current.associateBy { it.uri }
-        return incoming.map { new ->
-            val old = currentByUri[new.uri]
-            if (old != null && old.width == new.width && old.height == new.height) {
-                if (old.thumbnailPath != new.thumbnailPath) {
-                    old.copy(thumbnailPath = new.thumbnailPath)
-                } else {
-                    old
-                }
-            } else {
-                new
-            }
-        }
+        return mergeOrderedItems(current, incoming) { it.uri }
     }
 
     private fun removePhotoFromState(photo: Photo) {

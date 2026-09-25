@@ -8,14 +8,18 @@ struct GalleryScreen: View {
     let isLoading: Bool
     let onOpenSwitcher: () -> Void
     let onRename: () -> Void
-    let onSelectPhoto: (Int, PhotoMetadata) -> Void
+    let onSelectPhoto: (Int, PhotoMetadata, Set<String>) -> Void
     let onDeletePhoto: (PhotoItem) -> Void
+    let returnTargetID: String?
+    let onReturnPositioned: (String) -> Void
     var onLoadMore: () -> Void = {}
+    @State private var visiblePhotoIDs: Set<String> = []
 
     var body: some View {
-        ScrollViewReader { reader in
-            ScrollView(showsIndicators: false) {
-                LazyVStack(spacing: 0) {
+        GeometryReader { viewport in
+            ScrollViewReader { reader in
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: 0) {
                     GalleryHeader(
                         gallery: gallery,
                         count: overview?.count ?? photos.count,
@@ -44,9 +48,25 @@ struct GalleryScreen: View {
                             OriginalRatioRow(
                                 photos: Array(photos[index..<min(index + 2, photos.count)]),
                                 startIndex: index,
-                                onSelect: onSelectPhoto,
+                                onSelect: { selectedIndex, metadata in
+                                    var entryIDs = visiblePhotoIDs
+                                    let rowStart = selectedIndex / 2 * 2
+                                    for photo in photos[rowStart..<min(rowStart + 2, photos.count)] {
+                                        entryIDs.insert(photo.id)
+                                    }
+                                    onSelectPhoto(selectedIndex, metadata, entryIDs)
+                                },
                                 onDelete: onDeletePhoto
                             )
+                            .background {
+                                GeometryReader { row in
+                                    Color.clear.preference(
+                                        key: GalleryRowFramesKey.self,
+                                        value: [index: row.frame(in: .named("gallery-viewport"))]
+                                    )
+                                }
+                            }
+                            .id(photos[index].id)
                             .onAppear {
                                 if index + 4 >= photos.count {
                                     onLoadMore()
@@ -56,10 +76,47 @@ struct GalleryScreen: View {
                     }
 
                     Spacer().frame(height: 24)
+                    }
                 }
+                .coordinateSpace(name: "gallery-viewport")
+                .onPreferenceChange(GalleryRowFramesKey.self) { frames in
+                    let viewportRect = CGRect(origin: .zero, size: viewport.size)
+                    let indices = GalleryReturnPosition.visibleIndices(
+                        rowFrames: frames, viewport: viewportRect, photoCount: photos.count
+                    )
+                    let ids = Set(indices.map { photos[$0].id })
+                    if ids != visiblePhotoIDs { visiblePhotoIDs = ids }
+                }
+                .onChange(of: returnTargetID) { _, targetID in
+                    guard let targetID else { return }
+                    positionReturn(targetID, using: reader)
+                }
+                .onAppear {
+                    if let returnTargetID { positionReturn(returnTargetID, using: reader) }
+                }
+                .background(PunctumTheme.ink)
             }
-            .background(PunctumTheme.ink)
         }
+    }
+
+    private func positionReturn(_ targetID: String, using reader: ScrollViewProxy) {
+        guard let index = photos.firstIndex(where: { $0.id == targetID }) else { return }
+        let rowID = photos[index / 2 * 2].id
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { reader.scrollTo(rowID, anchor: .center) }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(32))
+            onReturnPositioned(targetID)
+        }
+    }
+}
+
+private struct GalleryRowFramesKey: PreferenceKey {
+    static var defaultValue: [Int: CGRect] = [:]
+
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue()) { _, latest in latest }
     }
 }
 

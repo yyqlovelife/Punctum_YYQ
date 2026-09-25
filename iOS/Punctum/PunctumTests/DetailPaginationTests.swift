@@ -52,4 +52,35 @@ final class DetailPaginationTests: XCTestCase {
         XCTAssertTrue(settled.shouldLoad)
         XCTAssertFalse(state(79, 80, more: false).shouldLoad)
     }
+
+    func testReturnKeepsPositionForPhotosVisibleAtEntry() {
+        let ids = (0..<12).map { "photo-\($0)" }
+        let viewport = CGRect(x: 0, y: 0, width: 390, height: 700)
+        let frames = [
+            0: CGRect(x: 0, y: -180, width: 390, height: 200),
+            2: CGRect(x: 0, y: 20, width: 390, height: 300),
+            4: CGRect(x: 0, y: 320, width: 390, height: 400),
+            6: CGRect(x: 0, y: 720, width: 390, height: 300),
+        ]
+        let indices = GalleryReturnPosition.visibleIndices(
+            rowFrames: frames, viewport: viewport, photoCount: ids.count
+        )
+        let entryIDs = Set(indices.map { ids[$0] })
+        XCTAssertEqual(entryIDs, Set((0..<6).map { "photo-\($0)" }))
+        XCTAssertFalse(GalleryReturnPosition.shouldCenter("photo-5", entryVisibleIDs: entryIDs))
+        XCTAssertTrue(GalleryReturnPosition.shouldCenter("photo-6", entryVisibleIDs: entryIDs))
+    }
+
+    func testReturnTargetSkipsPendingDeletionsAndUsesNextThenPreviousPhoto() {
+        let ids = (0..<8).map { "photo-\($0)" }
+        XCTAssertEqual(GalleryReturnPosition.targetID(
+            ids: ids, viewedID: "photo-6", fallbackIndex: 6, excluding: ["photo-6"]
+        ), "photo-7")
+        XCTAssertEqual(GalleryReturnPosition.targetID(
+            ids: ids, viewedID: "photo-7", fallbackIndex: 7, excluding: ["photo-6", "photo-7"]
+        ), "photo-5")
+        XCTAssertNil(GalleryReturnPosition.targetID(
+            ids: ids, viewedID: "photo-7", fallbackIndex: 7, excluding: Set(ids)
+        ))
+    }
 }

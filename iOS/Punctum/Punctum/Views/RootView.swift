@@ -24,8 +24,12 @@ struct RootView: View {
                     isLoading: model.isLoading,
                     onOpenSwitcher: model.openSwitcher,
                     onRename: { beginRename(gallery) },
-                    onSelectPhoto: model.openDetail,
+                    onSelectPhoto: { index, metadata, visibleIDs in
+                        model.openDetail(at: index, metadata: metadata, entryVisibleIDs: visibleIDs)
+                    },
                     onDeletePhoto: model.deletePhoto,
+                    returnTargetID: model.galleryReturnTargetID,
+                    onReturnPositioned: model.finishGalleryReturnPositioning,
                     onLoadMore: model.loadMorePhotos
                 )
                 .opacity(showingHome ? 0 : 1)

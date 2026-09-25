@@ -1,5 +1,11 @@
 # Design QA: original reversal-film card restored
 
+## 2026-09-25 · 双端本地验证与用户反馈
+
+- iOS：冷启动首页、封面恢复、图集进入和大图返回定位均已进入 0.5.9/59 源码。用户已确认新版本冷启动首页可自由滑动；封面、图集进入和返回定位仍缺少最新包的 iPhone 真机复测。大图返回定位的既有 43 项 XCTest、Release、IPA 完整性与版本核对通过。
+- Android：修复系统相册修改拍摄时间后图集排序在新旧缓存间反复跳动。19 项单测、Release、Lint、APK 签名通过；用户远程安装最新 APK 后反馈目前状态不错。本机没有连接安卓手机，无法取得原图集的日志和长期连续刷新数据。
+- 最新本地包分别为 `iOS/IPA/Punctum-0.5.9-return-center-unsigned.ipa` 与 `APK/Punctum-0.5.8-sort-stability.apk`。APK 已另行上传用户 Google Drive；安装包及私有设备素材不进 GitHub。
+
 ## 当前发布与接续 · 2026-09-20
 
 - **iOS 0.5.9 / 59**：新增大图对比模式，支持系统单选、横竖布局、独立/联动缩放及删除返回；同时包含1–5倍保留缩放、批量删除性能和连续翻页续载修复。

@@ -1,5 +1,9 @@
 # 观止新对话接续 · 2026-09-20
 
+## 2026-09-25 接续更新
+
+今天的完整增量及最新验收状态见 [PUNCTUM_HANDOFF.md](PUNCTUM_HANDOFF.md)、[Android 更新说明](changelog/android.md)、[iOS 更新说明](changelog/ios.md)。iOS 0.5.9/59 包含冷启动首页后台刷新、封面恢复、进入图集后台加载及大图返回列表定位；43 项 XCTest 与 Release 构建通过，冷启动滑动已获用户确认，其他最新交互待 iPhone 真机复测。Android 0.5.8/58 包含系统相册调整拍摄时间后的排序稳定性修复；19 项单测、Release、Lint 与签名验证通过，用户远程安装后反馈目前状态不错。最新本地包分别是 `iOS/IPA/Punctum-0.5.9-return-center-unsigned.ipa` 和 `APK/Punctum-0.5.8-sort-stability.apk`；安装包不进入 GitHub。
+
 ## 当前发布与接续 · 2026-09-20
 
 源码与文档已上传GitHub main，首个发布提交 `7d8e74580d9d73f1545e381254923d4bfda93db5`；远端文件树已与本地逐项核对一致。iOS 0.5.9/59重新运行41项XCTest全部通过。此记录取代下方历史“未提交上传”状态。
