@@ -21,6 +21,22 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.IntentSenderRequest
 import android.app.Activity
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.TransformOrigin
+import com.punctum.gallery.ui.LocalHomeAnchors
+import com.punctum.gallery.ui.LocalSharedPhotoMotion
+import com.punctum.gallery.ui.PhotoFlight
+import com.punctum.gallery.ui.PhotoFlightOverlay
+import com.punctum.gallery.ui.photoMotionBitmap
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.platform.LocalContext
+import com.punctum.gallery.ui.SharedPhotoMotion
+import com.punctum.gallery.ui.SHARED_MOTION_MILLIS
+import com.punctum.gallery.ui.DETAIL_ENTRY_MILLIS
+import com.punctum.gallery.ui.DetailEntryEase
+import com.punctum.gallery.ui.navigationMotionGuard
+import com.punctum.gallery.ui.SharedMotionEase
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -93,8 +109,8 @@ private enum class HomeGalleryTransitionMode {
 
 // One-switch rollback: LEGACY restores the original instant page reveal below.
 private val HomeGalleryTransition = HomeGalleryTransitionMode.LAYERED
-private const val HOME_GALLERY_ENTER_DURATION_MILLIS = 180
-private const val HOME_GALLERY_EXIT_DURATION_MILLIS = 160
+private const val HOME_GALLERY_ENTER_DURATION_MILLIS = SHARED_MOTION_MILLIS
+private const val HOME_GALLERY_EXIT_DURATION_MILLIS = SHARED_MOTION_MILLIS
 private val HomeGalleryEnterOffset = 8.dp
 private val HomeGalleryEaseOut = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
@@ -232,8 +248,41 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun PunctumApp(vm: GalleryViewModel) {
+    val homeAnchors = remember { mutableMapOf<String, Rect>() }
+    var galleryOrigin by remember { mutableStateOf<Rect?>(null) }
+    var detailClosing by remember { mutableStateOf(false) }
+    var activePhotoID by remember { mutableStateOf<String?>(null) }
+    var detailOpening by remember { mutableStateOf(false) }
+    val detailInformationAlpha = remember { Animatable(1f) }
+    var photoFlight by remember { mutableStateOf<PhotoFlight?>(null) }
+    val context = LocalContext.current
     val current = vm.currentGallery
     val currentKey = current?.uri?.toString()
+    val listPhotoBounds = remember(currentKey) { mutableStateMapOf<String, Rect>() }
+    val detailPhotoBounds = remember(currentKey) { mutableStateMapOf<String, Rect>() }
+
+    LaunchedEffect(vm.selectedIndex, vm.detailReturnPending) {
+        if (vm.selectedIndex == null) {
+            photoFlight = null
+            detailOpening = false
+            detailClosing = false
+            detailInformationAlpha.snapTo(1f)
+            return@LaunchedEffect
+        }
+        if (!detailOpening || vm.detailReturnPending) return@LaunchedEffect
+        val flight = photoFlight ?: return@LaunchedEffect
+        val target = kotlinx.coroutines.withTimeoutOrNull(500) {
+            snapshotFlow { detailPhotoBounds[flight.photoID] }.first { it != null }
+        }
+        if (target != null) {
+            androidx.compose.runtime.withFrameNanos { }
+            flight.destination = detailPhotoBounds[flight.photoID] ?: target
+            // The detail page now moves as one picture-and-information group.
+            flight.progress.animateTo(1f, tween(DETAIL_ENTRY_MILLIS, easing = DetailEntryEase))
+        } else detailInformationAlpha.snapTo(1f)
+        photoFlight = null
+        detailOpening = false
+    }
     var renameTarget by remember { mutableStateOf<Gallery?>(null) }
     var showAlbumPicker by remember { mutableStateOf(false) }
     var readyGalleryKey by remember(currentKey) { mutableStateOf<String?>(null) }
@@ -251,7 +300,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
     val homeToast = vm.homeToast
     LaunchedEffect(homeToast) {
         if (homeToast == null) return@LaunchedEffect
-        delay(2200)
+        delay(if (homeToast == GalleryViewModel.PHOTO_SORT_HINT) 2000 else 2200)
         if (vm.homeToast == homeToast) vm.clearHomeToast()
     }
     val pendingScrollIndex = vm.pendingHomeScrollIndex
@@ -307,6 +356,14 @@ private fun PunctumApp(vm: GalleryViewModel) {
         }
     }
 
+    CompositionLocalProvider(
+        LocalHomeAnchors provides homeAnchors,
+        LocalSharedPhotoMotion provides SharedPhotoMotion(
+            listPhotoBounds, detailPhotoBounds, photoFlight,
+            informationAlpha = { detailInformationAlpha.value },
+
+        ),
+    ) {
     Box(modifier = Modifier.fillMaxSize().background(Ink)) {
         Box(
             modifier = Modifier
@@ -333,7 +390,10 @@ private fun PunctumApp(vm: GalleryViewModel) {
                     postcardListState = postcardListState,
                     ticketListState = ticketListState,
                     reversalFilmGridState = reversalFilmGridState,
-                    onSelect = vm::selectGallery,
+                    onSelect = { id ->
+                        galleryOrigin = homeAnchors[id]
+                        vm.selectGallery(id)
+                    },
                     onAdd = { showAlbumPicker = true },
                     onToggleInvitationStyle = vm::toggleInvitationStyle,
                     onRename = { renameTarget = it },
@@ -348,16 +408,24 @@ private fun PunctumApp(vm: GalleryViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .navigationMotionGuard(galleryExitInProgress || readyGalleryKey != currentKey)
                     .graphicsLayer {
                         alpha = when {
                             readyGalleryKey != currentKey -> 0f
                             layeredHomeGalleryMotion -> galleryTransitionProgress.value
                             else -> 1f
                         }
-                        translationY = if (layeredHomeGalleryMotion) {
-                            (1f - galleryTransitionProgress.value) * galleryEnterOffsetPx
+                        val origin = galleryOrigin
+                        if (layeredHomeGalleryMotion && origin != null && size.width > 0 && size.height > 0) {
+                            val amount = galleryTransitionProgress.value
+                            transformOrigin = TransformOrigin(0f, 0f)
+                            scaleX = origin.width / size.width + (1f - origin.width / size.width) * amount
+                            scaleY = origin.height / size.height + (1f - origin.height / size.height) * amount
+                            translationX = origin.left * (1f - amount)
+                            translationY = origin.top * (1f - amount)
+                            clip = true
                         } else {
-                            0f
+                            translationY = if (layeredHomeGalleryMotion) (1f - galleryTransitionProgress.value) * galleryEnterOffsetPx else 0f
                         }
                     }
                     .background(Ink),
@@ -380,7 +448,31 @@ private fun PunctumApp(vm: GalleryViewModel) {
                                 listState.centerGalleryReturnRow(returnRow)
                             }
                             androidx.compose.runtime.withFrameNanos { }
+                            androidx.compose.runtime.withFrameNanos { }
+                            if (ValueAnimator.areAnimatorsEnabled()) {
+                                // Complete the information exit while the image stays still.
+                                detailInformationAlpha.animateTo(0f, tween(80, easing = SharedMotionEase))
+                                androidx.compose.runtime.withFrameNanos { }
+                                val id = activePhotoID
+                                val photo = vm.photos.firstOrNull { it.uri.toString() == id }
+                                val source = photoFlight?.takeIf { it.photoID == id }?.bounds
+                                    ?: detailPhotoBounds[id]
+                                val target = listPhotoBounds[id]
+                                val bitmap = photo?.let { photoMotionBitmap(context, it, detail = true) }
+                                val flight = if (id != null && id == vm.galleryReturnPhotoID &&
+                                    source != null && target != null && bitmap != null) {
+                                    PhotoFlight(id, bitmap, source).also { it.destination = target }
+                                } else null
+                                photoFlight = flight
+                                detailOpening = false
+                                detailClosing = true
+                                if (flight != null) {
+                                    flight.progress.animateTo(1f, tween(SHARED_MOTION_MILLIS, easing = SharedMotionEase))
+                                } else delay(SHARED_MOTION_MILLIS.toLong())
+                            }
                             vm.finishDetailReturn()
+                            photoFlight = null
+                            detailClosing = false
                         } else if (vm.selectedIndex == null && returnRow != null &&
                             shouldCenterGalleryReturn(vm.galleryReturnPhotoID, detailEntryVisibleIDs)) {
                             listState.centerGalleryReturnRow(returnRow)
@@ -391,9 +483,11 @@ private fun PunctumApp(vm: GalleryViewModel) {
                         photos = vm.photos,
                         overview = vm.overviews[currentKey],
                         loading = vm.loadingPhotos,
+                        sorting = vm.sortingPhotos,
                         listState = listState,
                         onOpenSwitcher = ::requestHome,
                         onRename = { renameTarget = it },
+                        onToggleSort = vm::togglePhotoSort,
                         onSelectPhoto = { index ->
                             // Capture photo identities, including partly visible rows, before opening detail.
                             val layout = listState.layoutInfo
@@ -406,7 +500,23 @@ private fun PunctumApp(vm: GalleryViewModel) {
                                         vm.photos.getOrNull(it)?.uri?.toString()
                                     }
                                 }.toSet()
-                            vm.openDetail(index)
+                            if (!vm.sortingPhotos) {
+                                val photo = vm.photos.getOrNull(index)
+                                val id = photo?.uri?.toString()
+                                val source = listPhotoBounds[id]
+                                val bitmap = photo?.let { photoMotionBitmap(context, it, detail = false) }
+                                detailClosing = false
+                                activePhotoID = id
+                                // Discard old off-screen pager geometry before a new visit.
+                                detailPhotoBounds.clear()
+                                photoFlight = if (ValueAnimator.areAnimatorsEnabled() && id != null &&
+                                    source != null && bitmap != null) PhotoFlight(id, bitmap, source, unifiedEntry = true) else null
+                                detailOpening = photoFlight != null
+                                transitionScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                                    detailInformationAlpha.snapTo(1f)
+                                    vm.openDetail(index)
+                                }
+                            }
                         },
                         onDeletePhoto = vm::deletePhoto,
                         onWarmThumbnails = vm::warmGalleryThumbnails,
@@ -447,12 +557,13 @@ private fun PunctumApp(vm: GalleryViewModel) {
         }
 
         val detailIndex = vm.selectedIndex
-        AnimatedVisibility(
-            visible = detailIndex != null && vm.photos.isNotEmpty(),
-            enter = fadeIn(tween(180)) ,
-            exit = fadeOut(tween(140)),
-        ) {
-            if (detailIndex != null && vm.photos.isNotEmpty()) DetailScreen(
+        if (detailIndex != null && vm.photos.isNotEmpty()) {
+            val detailAlpha by androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (detailClosing) 0f else 1f,
+                animationSpec = tween(SHARED_MOTION_MILLIS), label = "detail-background",
+            )
+            Box(Modifier.fillMaxSize().navigationMotionGuard(detailOpening || detailClosing || vm.detailReturnPending).graphicsLayer { alpha = detailAlpha }) {
+            DetailScreen(
                 photos = vm.photos,
                 startIndex = detailIndex,
                 currentAlbumKey = currentKey,
@@ -461,14 +572,18 @@ private fun PunctumApp(vm: GalleryViewModel) {
                 moveError = vm.moveError,
                 onDelete = vm::queueDetailDeletion,
                 onClose = vm::closeDetail,
-                onPhotoViewed = vm::recordDetailPhoto,
+                onPhotoViewed = { photo -> activePhotoID = photo.uri.toString(); vm.recordDetailPhoto(photo) },
                 onWarmImages = vm::warmDetailImages,
                 onRequestSystemAlbums = vm::loadSystemAlbums,
                 onMovePhoto = vm::movePhoto,
                 onAcknowledgeMove = vm::acknowledgeCompletedMove,
                 onClearMoveError = vm::clearMoveError,
             )
+            }
         }
+
+        photoFlight?.takeIf { !it.unifiedEntry || it.destination == it.source }
+            ?.let { PhotoFlightOverlay(it) }
 
         if (showAlbumPicker) {
             AlbumPickerDialog(
@@ -498,6 +613,8 @@ private fun PunctumApp(vm: GalleryViewModel) {
                     .padding(horizontal = 16.dp, vertical = 9.dp),
             )
         }
+    }
+
     }
 
     val galleryLoading = currentKey != null && (vm.loadingPhotos || readyGalleryKey != currentKey)

@@ -6,6 +6,7 @@ import UIKit
 final class PhotoLibraryService {
     static let shared = PhotoLibraryService()
 
+    private var pinGeneration = 0
     private var orderGeneration = 0
     private var completedOrderGeneration: [String: Int] = [:]
     private var pinnedOrder: [String: [PHAsset]] = [:]
@@ -62,13 +63,37 @@ final class PhotoLibraryService {
 
     func pinCaptureOrder(for gallery: PunctumGallery) { pinnedOrder[gallery.id] = orderedAssets(for: gallery) }
     func pinCaptureOrderAsync(for gallery: PunctumGallery) async {
-        if let pinned = pinnedOrder[gallery.id] { pinnedOrder[gallery.id] = pinned; return }
-        if let ordered = captureOrder[gallery.id] { pinnedOrder[gallery.id] = ordered; return }
-        let assets = await Self.fetchAssetsInBackground(for: gallery, priority: .userInitiated)
-        guard !Task.isCancelled else { return }
-        pinnedOrder[gallery.id] = assets
+        pinGeneration += 1
+        let generation = pinGeneration
+        let assets: [PHAsset]
+        if let ordered = captureOrder[gallery.id], completedOrderGeneration[gallery.id] == orderGeneration {
+            assets = ordered
+        } else {
+            assets = await Self.fetchAssetsInBackground(for: gallery, priority: .userInitiated)
+        }
+        guard !Task.isCancelled, generation == pinGeneration else { return }
+        if gallery.sortOrder == .capture {
+            pinnedOrder[gallery.id] = assets
+            return
+        }
+        var keys: [(asset: PHAsset, capture: Date, modified: Date?, id: String)] = []
+        for (index, asset) in assets.enumerated() {
+            guard !Task.isCancelled, generation == pinGeneration else { return }
+            keys.append((asset, CaptureDateIndex.shared.date(for: asset), asset.modificationDate, asset.localIdentifier))
+            if index.isMultiple(of: 64) { await Task.yield() }
+        }
+        let snapshot = keys
+        let order = gallery.sortOrder
+        let sorted = await Task.detached(priority: .userInitiated) {
+            snapshot.sorted {
+                order.precedes(capture: $0.capture, modified: $0.modified, id: $0.id,
+                               capture: $1.capture, modified: $1.modified, id: $1.id)
+            }.map(\.asset)
+        }.value
+        guard !Task.isCancelled, generation == pinGeneration else { return }
+        pinnedOrder[gallery.id] = sorted
     }
-    func unpinCaptureOrder() { pinnedOrder.removeAll() }
+    func unpinCaptureOrder() { pinGeneration += 1; pinnedOrder.removeAll() }
 
     nonisolated private static func fetchAssetsInBackground(
         for gallery: PunctumGallery, priority: TaskPriority = .utility
@@ -219,12 +244,19 @@ final class PhotoLibraryService {
         return result
     }
 
+    private func captureAssets(for gallery: PunctumGallery) -> [PHAsset] {
+        if let ordered = captureOrder[gallery.id] { return ordered }
+        var assets: [PHAsset] = []
+        photoResult(for: gallery).enumerateObjects { asset, _, _ in assets.append(asset) }
+        return assets
+    }
+
     func latestPhotos(
         in gallery: PunctumGallery,
         limit: Int = 4,
         excluding excludedIDs: Set<String> = []
     ) -> [PhotoItem] {
-        orderedAssets(for: gallery).filter { !excludedIDs.contains($0.localIdentifier) }
+        captureAssets(for: gallery).filter { !excludedIDs.contains($0.localIdentifier) }
             .prefix(limit).map { PhotoItem(asset: $0, name: "Photo") }
     }
 
@@ -255,7 +287,7 @@ final class PhotoLibraryService {
         excluding excludedIDs: Set<String> = []
     ) async -> GalleryOverview? {
         let assets: [PHAsset]
-        if let ordered = pinnedOrder[gallery.id] ?? captureOrder[gallery.id] {
+        if let ordered = captureOrder[gallery.id] {
             assets = ordered
         } else {
             assets = await Self.fetchAssetsInBackground(for: gallery)

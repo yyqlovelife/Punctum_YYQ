@@ -24,6 +24,8 @@ struct RootView: View {
                     isLoading: model.isLoading,
                     onOpenSwitcher: model.openSwitcher,
                     onRename: { beginRename(gallery) },
+                    sortingEnabled: !model.isLoading && !model.isSortingPhotos,
+                    onToggleSort: model.togglePhotoSort,
                     onSelectPhoto: { index, metadata, visibleIDs in
                         model.openDetail(at: index, metadata: metadata, entryVisibleIDs: visibleIDs)
                     },
@@ -127,11 +129,10 @@ struct RootView: View {
         .overlay(alignment: .center) {
             if let message = model.transientMessage {
                 ToastView(message: message)
-                    .onAppear {
-                        Task {
-                            try? await Task.sleep(for: .seconds(2.4))
-                            if model.transientMessage == message { model.transientMessage = nil }
-                        }
+                    .task(id: message) {
+                        try? await Task.sleep(for: .seconds(message == GalleryViewModel.photoSortHint ? 2 : 2.4))
+                        guard !Task.isCancelled else { return }
+                        if model.transientMessage == message { model.transientMessage = nil }
                     }
             }
         }

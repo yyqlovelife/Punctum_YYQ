@@ -74,11 +74,13 @@ internal fun Modifier.punctumPressable(
     pressedOffsetY: Dp = 2.dp,
     pressedAlpha: Float = 0.78f,
     activateImmediatelyOnRelease: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ): Modifier {
     val progress = remember { Animatable(0f) }
     val animationScope = rememberCoroutineScope()
     val currentOnClick by rememberUpdatedState(onClick)
+    val currentOnLongClick by rememberUpdatedState(onLongClick)
 
     LaunchedEffect(enabled) {
         if (!enabled) progress.snapTo(0f)
@@ -93,10 +95,15 @@ internal fun Modifier.punctumPressable(
             translationY = pressedOffsetY.toPx() * amount
             alpha = 1f + (pressedAlpha - 1f) * amount
         }
-        .pointerInput(enabled, activateImmediatelyOnRelease) {
+        .pointerInput(enabled, activateImmediatelyOnRelease, onLongClick != null) {
             if (!enabled) return@pointerInput
+            var longPressed = false
             detectTapGestures(
+                onLongPress = if (onLongClick == null) null else {
+                    { longPressed = true; currentOnLongClick?.invoke() }
+                },
                 onPress = {
+                    longPressed = false
                     if (activateImmediatelyOnRelease) {
                         val pressJob = animationScope.launch {
                             progress.animateTo(
@@ -118,7 +125,7 @@ internal fun Modifier.punctumPressable(
                                 ),
                             )
                         }
-                        if (released) currentOnClick()
+                        if (released && !longPressed) currentOnClick()
                         return@detectTapGestures
                     }
 
@@ -142,7 +149,7 @@ internal fun Modifier.punctumPressable(
                                     stiffness = 900f,
                                 ),
                             )
-                            currentOnClick()
+                            if (!longPressed) currentOnClick()
                         } else {
                             pressJob.cancel()
                             progress.animateTo(

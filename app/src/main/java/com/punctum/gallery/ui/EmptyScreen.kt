@@ -30,10 +30,10 @@ internal fun EmptyScreen(onPickFolder: () -> Unit) {
     ) {
         Text("P U N C T U M", style = MaterialTheme.typography.labelSmall, color = Muted)
         Spacer(Modifier.height(22.dp))
-        Text("Punctum", style = MaterialTheme.typography.displayMedium, color = Bone)
+        Text("Select Exhibition", style = MaterialTheme.typography.displayMedium, color = Bone, textAlign = TextAlign.Center)
         Spacer(Modifier.height(18.dp))
         Text(
-            "为情绪而生的画廊。\n从系统 DCIM 与 Pictures 图集里，映射你的第一个展厅。",
+            "选择一个图集，作为你的第一个画廊\n让每一次回望，都重新感受影像的重量",
             style = MaterialTheme.typography.bodyMedium,
             color = Muted,
             textAlign = TextAlign.Center,

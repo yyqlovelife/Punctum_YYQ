@@ -8,7 +8,15 @@ Earlier local update (2026-09-25): cold launch displays saved home cards before 
 
 Prior handoff (2026-09-20): [session status](../../SESSION_HANDOFF_2026-09-20.md). Release IPA at that time: `iOS/IPA/Punctum-0.5.9-unsigned.ipa` (path from repository root), 41 tests passed; physical-device acceptance remains pending. Earlier package references below are historical.
 
-Native SwiftUI / UIKit edition of Punctum · 观止. Current version: **0.5.9 (build 59)**, updated 2026-09-25. Minimum deployment target: **iOS 17**. Bundle identifier: `com.chessyyq.punctum`.
+Native SwiftUI / UIKit edition of Punctum · 观止. Current version: **0.5.9 (build 59)**, updated 2026-10-05. Minimum deployment target: **iOS 17**. Bundle identifier: `com.chessyyq.punctum`.
+
+## Photo sorting update · 2026-10-05
+
+Each gallery remembers Capture / Edited ordering. The text-only switch above the style label uses matching typography/color, with each row aligned by its first text baseline. First tap shows the Chinese sorting hint for 2 seconds, once per app installation. Edited order uses PhotoKit modificationDate, then resolved capture date and stable asset ID. Covers and displayed metadata continue using capture dates. Sorting snapshots runs off the main actor and pagination uses the complete chosen order. IPA is unsigned for AltStore signing.
+
+## Onboarding and source handoff · 2026-10-05
+
+Onboarding uses “Select Exhibition”, “选择一个图集，作为你的第一个画廊” and “让每一次回望，都重新感受影像的重量”, without full stops. The latest onboarding IPA includes sorting; Release previously passed and its archive integrity was rechecked. Source, tests and docs are synchronized alongside Android 0.5.9. The new navigation motion is Android-only; iOS physical-device acceptance remains pending.
 
 ## Current experience
 
@@ -20,7 +28,7 @@ Native SwiftUI / UIKit edition of Punctum · 观止. Current version: **0.5.9 (b
 - Native snapshot swipe deletion with resisted drag and a **280ms** shrink toward the trash target. The user confirmed the smoother interaction and final timing. Deletions remain pending until confirmation on leaving detail.
 - Full-frame background decoding, shared image requests, per-photo EXIF prefetch, portrait top alignment, and foreground gesture cleanup.
 
-The legacy SwiftUI deletion path remains behind `nativeDeletionEnabled` in `Views/DetailScreen.swift`. Do not restore the abandoned dynamic pager placeholders, portrait safe-area gap, or modified-time sorting toggle.
+The legacy SwiftUI deletion path remains behind `nativeDeletionEnabled` in `Views/DetailScreen.swift`. Do not restore the abandoned dynamic pager placeholders, portrait safe-area gap, or the old header-icon sorting layout.
 
 ## Build and test
 
@@ -41,11 +49,11 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 scripts/build-unsigned-ipa.sh
 ```
 
-The packaging script writes an unsigned IPA under `../IPA/`. The latest local delivery is `Punctum-0.5.9-return-center-unsigned.ipa`; earlier filenames in the changelog are historical. Do not run concurrent xcodebuild jobs against one DerivedData directory.
+The packaging script writes an unsigned IPA under `../IPA/`. The latest local delivery is `Punctum-0.5.9-onboarding-copy-unsigned.ipa`; earlier filenames in the changelog are historical. Do not run concurrent xcodebuild jobs against one DerivedData directory.
 
 ## Verification and distribution
 
-The latest regression run passed 43 tests; Release, IPA integrity and bundled 0.5.9/59 checks passed. The user confirmed that the cold-launch home screen can scroll freely. Cover restoration, gallery entry and return positioning still need iPhone validation; see `changelog/ios.md` and `PUNCTUM_HANDOFF.md`. The tests do not establish physical frame rate or gesture acceptance.
+The latest regression run passed 47 tests; Release, IPA integrity and bundled 0.5.9/59 checks passed. The user confirmed that the cold-launch home screen can scroll freely. Cover restoration, gallery entry and return positioning still need iPhone validation; see `changelog/ios.md` and `PUNCTUM_HANDOFF.md`. The tests do not establish physical frame rate or gesture acceptance.
 
 Use AltStore / AltServer to sign the unsigned IPA, preserving the existing Apple account/app identity for an overlay install. Simulator builds cannot run on an iPhone. Signing certificates, provisioning profiles and credentials stay outside Git. Android resources referenced by this project are included in the repository; clone the full repository when moving machines.
 

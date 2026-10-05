@@ -7,6 +7,7 @@ data class Gallery(
     val uri: Uri,
     val displayName: String,
     val styleId: String = GalleryStyle.ORIGINAL.id,
+    val sortOrder: PhotoSortOrder = PhotoSortOrder.CAPTURE,
 )
 
 /** 画廊展示风格。V0.0.1 仅实现「原幅」，其余为后续扩展预留。 */

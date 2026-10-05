@@ -422,11 +422,13 @@ private fun PostcardList(
                 items = overviews,
                 key = { _, item -> item.gallery.uri.toString() },
             ) { _, ov ->
+                Box(Modifier.homeMotionAnchor(ov.gallery.uri.toString())) {
                 PostcardInvitationCard(
                     overview = ov,
                     width = cardWidth,
                     onClick = { onSelect(ov.gallery.uri.toString()) },
                 )
+                }
             }
             item(key = "navbar") {
                 Spacer(Modifier.navigationBarsPadding().height(8.dp))
@@ -451,10 +453,12 @@ private fun TicketList(
             items = overviews,
             key = { _, item -> item.gallery.uri.toString() },
         ) { _, ov ->
+            Box(Modifier.homeMotionAnchor(ov.gallery.uri.toString())) {
             TicketInvitationCard(
                 overview = ov,
                 onClick = { onSelect(ov.gallery.uri.toString()) },
             )
+            }
         }
         item(key = "navbar") {
             Spacer(Modifier.navigationBarsPadding().height(8.dp))
@@ -491,12 +495,14 @@ private fun ReversalFilmGrid(
                 key = { _, item -> item.gallery.uri.toString() },
             ) { _, overview ->
                 val galleryKey = overview.gallery.uri.toString()
+                Box(Modifier.homeMotionAnchor(galleryKey)) {
                 ReversalFilmCard(
                     overview = overview,
                     visualScale = scale,
                     variant = cardVariants.getOrPut(galleryKey) { Random.nextInt(3) },
                     onClick = { onSelect(galleryKey) },
                 )
+                }
             }
             item(key = "navbar", span = { GridItemSpan(maxLineSpan) }) {
                 Spacer(Modifier.navigationBarsPadding().height(8.dp * scale))

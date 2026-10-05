@@ -6,6 +6,19 @@ struct PunctumGallery: Identifiable, Codable, Equatable, Hashable {
     let id: String
     var displayName: String
     var styleID: String = "original"
+    var sortOrder: PhotoSortOrder = .capture
+
+    init(id: String, displayName: String, styleID: String = "original", sortOrder: PhotoSortOrder = .capture) {
+        self.id = id; self.displayName = displayName; self.styleID = styleID; self.sortOrder = sortOrder
+    }
+    private enum CodingKeys: String, CodingKey { case id, displayName, styleID, sortOrder }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        displayName = try values.decode(String.self, forKey: .displayName)
+        styleID = try values.decodeIfPresent(String.self, forKey: .styleID) ?? "original"
+        sortOrder = PhotoSortOrder(rawValue: try values.decodeIfPresent(String.self, forKey: .sortOrder) ?? "") ?? .capture
+    }
 }
 
 enum InvitationCardStyle: String, Codable, CaseIterable {
@@ -136,4 +149,22 @@ struct PhotoMetadata: Equatable {
     var iso: String?
     var resolution: String?
     var fileSize: String?
+}
+
+// Keys are captured before background sorting so PhotoKit/EXIF lookups stay outside the comparator.
+enum PhotoSortOrder: String, Codable {
+    case capture, modified
+    var label: String { self == .capture ? "拍摄" : "编辑" }
+    var next: Self { self == .capture ? .modified : .capture }
+    func precedes(capture lhsCapture: Date, modified lhsModified: Date?, id lhsID: String,
+                  capture rhsCapture: Date, modified rhsModified: Date?, id rhsID: String) -> Bool {
+        let lhs = self == .capture ? lhsCapture : (lhsModified ?? lhsCapture)
+        let rhs = self == .capture ? rhsCapture : (rhsModified ?? rhsCapture)
+        if lhs != rhs { return lhs > rhs }
+        if self == .modified, lhsCapture != rhsCapture { return lhsCapture > rhsCapture }
+        if self == .capture, lhsModified != rhsModified {
+            return (lhsModified ?? .distantPast) > (rhsModified ?? .distantPast)
+        }
+        return lhsID < rhsID
+    }
 }

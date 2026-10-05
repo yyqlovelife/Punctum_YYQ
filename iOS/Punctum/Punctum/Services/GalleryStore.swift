@@ -11,6 +11,13 @@ final class GalleryStore {
         self.defaults = defaults
     }
 
+    func consumePhotoSortHint() -> Bool {
+        let key = "punctum.photoSortHintSeen"
+        guard !defaults.bool(forKey: key) else { return false }
+        defaults.set(true, forKey: key)
+        return true
+    }
+
     func loadGalleries() -> [PunctumGallery] {
         guard let data = defaults.data(forKey: galleriesKey) else { return [] }
         return (try? JSONDecoder().decode([PunctumGallery].self, from: data)) ?? []

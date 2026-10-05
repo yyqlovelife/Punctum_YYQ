@@ -7,6 +7,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published private(set) var galleries: [PunctumGallery]
     @Published private(set) var overviews: [String: GalleryOverview] = [:]
     @Published private(set) var photos: [PhotoItem] = []
+    @Published private(set) var isSortingPhotos = false
+    static let photoSortHint = "可切换按「拍摄时间」或「编辑时间」排序"
     @Published private(set) var isLoading = false
     @Published var currentGalleryID: String?
     @Published var showSwitcher = false
@@ -186,6 +188,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
     func selectGallery(_ id: String) {
         guard let gallery = galleries.first(where: { $0.id == id }) else { return }
+        isSortingPhotos = false
         gallerySelectionTask?.cancel()
         library.unpinCaptureOrder()
         let switching = currentGalleryID != id
@@ -209,6 +212,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func openSwitcher() {
+        isSortingPhotos = false
         gallerySelectionTask?.cancel()
         gallerySelectionTask = nil
         library.unpinCaptureOrder()
@@ -219,6 +223,27 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
     func closeSwitcher() {
         showSwitcher = false
+    }
+
+    func togglePhotoSort() {
+        guard var gallery = currentGallery, !isLoading, !isSortingPhotos,
+              detailIndex == nil, !deletionInFlight, pendingDeletionRequest == nil else { return }
+        if store.consumePhotoSortHint() { transientMessage = Self.photoSortHint }
+        gallery.sortOrder = gallery.sortOrder.next
+        gallerySelectionTask?.cancel()
+        isSortingPhotos = true
+        gallerySelectionTask = Task { [weak self] in
+            guard let self else { return }
+            await library.pinCaptureOrderAsync(for: gallery)
+            guard !Task.isCancelled, currentGalleryID == gallery.id, !showSwitcher,
+                  let index = galleries.firstIndex(where: { $0.id == gallery.id }) else { return }
+            galleries[index].sortOrder = gallery.sortOrder
+            persistGalleries()
+            galleryReturnTargetID = nil
+            gallerySelectionTask = nil
+            loadCurrentGallery()
+            isSortingPhotos = false
+        }
     }
 
     func toggleInvitationStyle() {
@@ -250,7 +275,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         overviewSnapshots.removeValue(forKey: removed.id)
         overviews.removeValue(forKey: removed.id)
         if currentGalleryID == removed.id {
-            gallerySelectionTask?.cancel()
+            isSortingPhotos = false
+        gallerySelectionTask?.cancel()
             gallerySelectionTask = nil
             library.unpinCaptureOrder()
             currentGalleryID = nil
@@ -263,7 +289,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func openDetail(at index: Int, metadata: PhotoMetadata, entryVisibleIDs: Set<String> = []) {
-        guard photos.indices.contains(index) else { return }
+        guard !isSortingPhotos, photos.indices.contains(index) else { return }
         if let gallery = currentGallery { library.pinCaptureOrder(for: gallery) }
         detailEntryVisibleIDs = entryVisibleIDs.isEmpty ? [photos[index].id] : entryVisibleIDs
         galleryReturnTargetID = nil
@@ -480,7 +506,12 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 await library.prepareCaptureOrder(for: gallery)
                 guard !Task.isCancelled, generation == refreshGeneration, !deletionInFlight else { return }
                 refreshOverview(for: gallery)
-                if currentGalleryID == gallery.id, !showSwitcher, gallerySelectionTask == nil { loadCurrentGallery() }
+                if currentGalleryID == gallery.id, !showSwitcher, gallerySelectionTask == nil, detailIndex == nil,
+                   let activeGallery = currentGallery {
+                    await library.pinCaptureOrderAsync(for: activeGallery)
+                    guard !Task.isCancelled, currentGalleryID == gallery.id, gallerySelectionTask == nil else { return }
+                    loadCurrentGallery()
+                }
                 await Task.yield()
             }
         }
@@ -553,6 +584,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     func loadMorePhotos() {
         guard let gallery = currentGallery,
               !isLoading,
+              !isSortingPhotos,
               !isLoadingMorePhotos,
               !deletionInFlight,
               pendingDeletionRequest == nil,

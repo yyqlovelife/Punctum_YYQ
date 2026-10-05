@@ -532,9 +532,10 @@ internal fun DetailScreen(
                             }
                         },
                         onToggleControls = { controlsVisible = !controlsVisible },
-                        animateImage = visiblePhotos[page].uri.toString() !in displayedDetailUris,
+                        animateImage = false,
                         onImageVisible = { displayedDetailUris.add(visiblePhotos[page].uri.toString()) },
                         onLivePlaybackChanged = { livePlaybackActive = it },
+                        sharedMotion = true,
                         pinchEnabled = PHOTO_PINCH_ENABLED && page == pagerState.currentPage,
                         onPinchActiveChanged = { photoPinching = it },
                     )
@@ -850,6 +851,7 @@ private fun ImmersivePhoto(
     animateImage: Boolean,
     onImageVisible: () -> Unit,
     onLivePlaybackChanged: (Boolean) -> Unit = {},
+    sharedMotion: Boolean = false,
     pinchEnabled: Boolean = false,
     onPinchActiveChanged: (Boolean) -> Unit = {},
 ) {
@@ -871,10 +873,11 @@ private fun ImmersivePhoto(
     }
     val scrollState = rememberScrollState()
     val configuration = LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
     val screenWidth = configuration.screenWidthDp.dp
     val density = LocalDensity.current
     val hostView = LocalView.current
+    val screenHeight = with(density) { hostView.height.toDp() }
+    val navigationMotion = LocalSharedPhotoMotion.current
     var placeName by remember(photo.uri) { mutableStateOf<String?>(null) }
     var motionPlaybackMode by remember(photo.uri) {
         mutableStateOf(MotionPlaybackMode.NONE)
@@ -1152,6 +1155,7 @@ private fun ImmersivePhoto(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .detailNavigationGroup(photo.uri.toString())
                 .verticalScroll(scrollState, enabled = !pinchActive),
         ) {
             DetailPhotoFrame(
@@ -1162,6 +1166,7 @@ private fun ImmersivePhoto(
                 motionPlaybackMode = motionPlaybackMode,
                 videoBlend = videoBlend,
                 photoTransform = photoTransform,
+                sharedMotion = sharedMotion,
                 onBadgeClick = {
                     setMotionPlayback(MotionPlaybackMode.PLAY_ONCE)
                 },
@@ -1169,7 +1174,10 @@ private fun ImmersivePhoto(
 
             Spacer(Modifier.height(34.dp))
 
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 30.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 30.dp)
+                .graphicsLayer {
+                    alpha = navigationMotion?.informationAlpha?.invoke() ?: 1f
+                }) {
                 Text(
                     "No.$displayNumber",
                     style = DetailTitleStyle,
@@ -1227,11 +1235,17 @@ private fun DetailPhotoFrame(
     videoBlend: Float,
     onBadgeClick: () -> Unit,
     photoTransform: Modifier = Modifier,
+    sharedMotion: Boolean = false,
 ) {
     val context = LocalContext.current
     val imageModel = remember(photo.uri, photo.stillImageByteCount) {
         ImageRequest.Builder(context)
             .data(PhotoStill.forDetail(photo))
+            .placeholderMemoryCacheKey(
+                if (PhotoStill.SINGLE_PASS_LIST) "gallery-final-thumb-fit-v2:${photo.uri}:${photo.modifiedMillis}"
+                else photo.thumbnailPath?.let { "gallery-hq-thumb-fit-v1:${photo.uri}:$it" }
+                    ?: "gallery-system-thumb-fit-v3:${photo.uri}:${photo.modifiedMillis}"
+            )
             .memoryCacheKey("detail:${photo.uri}")
             .diskCacheKey("detail:${photo.uri}")
             .size(1800)
@@ -1243,13 +1257,14 @@ private fun DetailPhotoFrame(
         DetailImageContent(
             photo = photo,
             model = imageModel,
-            animateOnLoad = animateImage,
+            animateOnLoad = animateImage && !sharedMotion,
             onSuccess = onImageVisible,
             motionPlaybackMode = motionPlaybackMode,
             videoBlend = videoBlend,
             onBadgeClick = onBadgeClick,
             modifier = Modifier
                 .zIndex(1f)
+                .then(if (sharedMotion) Modifier.sharedPhotoMotion(photo.uri.toString(), detail = true) else Modifier)
                 .fillMaxWidth()
                 .aspectRatio(aspect)
                 .then(photoTransform),
@@ -1267,7 +1282,7 @@ private fun DetailPhotoFrame(
                 DetailImageContent(
                     photo = photo,
                     model = imageModel,
-                    animateOnLoad = animateImage,
+                    animateOnLoad = animateImage && !sharedMotion,
                     onSuccess = onImageVisible,
                     motionPlaybackMode = motionPlaybackMode,
                     videoBlend = videoBlend,
@@ -1275,6 +1290,7 @@ private fun DetailPhotoFrame(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = topPadding)
+                        .then(if (sharedMotion) Modifier.sharedPhotoMotion(photo.uri.toString(), detail = true) else Modifier)
                         .aspectRatio(aspect)
                         .then(photoTransform),
                 )

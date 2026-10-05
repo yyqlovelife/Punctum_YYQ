@@ -15,6 +15,7 @@ import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.model.InvitationCardStyle
 import com.punctum.gallery.model.Photo
+import com.punctum.gallery.model.PhotoSortOrder
 import com.punctum.gallery.model.SystemAlbum
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -37,6 +38,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     private val photoRefreshJobs = mutableMapOf<String, Job>()
     private var overviewRefreshJob: Job? = null
     private var galleryEntryJob: Job? = null
+    private var gallerySortJob: Job? = null
+    private var gallerySortGeneration = 0
     private var galleryEntryGeneration = 0
     private var dataRefreshJob: Job? = null
     private var foregroundSyncJob: Job? = null
@@ -56,6 +59,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     var photos by mutableStateOf<List<Photo>>(emptyList())
         private set
     var loadingPhotos by mutableStateOf(false)
+        private set
+    var sortingPhotos by mutableStateOf(false)
         private set
     var overviews by mutableStateOf<Map<String, GalleryOverview>>(emptyMap())
         private set
@@ -166,6 +171,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectGallery(uriKey: String) {
+        gallerySortGeneration += 1
+        gallerySortJob?.cancel()
+        sortingPhotos = false
         cancelGalleryEntryWork()
         photoRefreshJobs.remove(uriKey)?.cancel()
         detailReturnPending = false
@@ -178,11 +186,11 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshCurrentData() {
-        if (galleryEntryJob?.isActive == true) return
+        if (galleryEntryJob?.isActive == true || sortingPhotos) return
         dataRefreshJob?.cancel()
         dataRefreshJob = viewModelScope.launch {
             delay(250)
-            if (galleryEntryJob?.isActive == true) return@launch
+            if (galleryEntryJob?.isActive == true || sortingPhotos) return@launch
             val uriKey = currentUri
             if (uriKey == null) refreshOverviews(force = true)
             else refreshPhotos(uriKey, cached = photoCache[uriKey].orEmpty())
@@ -290,7 +298,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     PhotoRepository.loadPhotos(getApplication(), gallery.uri, cached)
                 }
-                val visible = visiblePhotosForGallery(uriKey, list)
+                val sorted = withContext(Dispatchers.Default) { sortPhotos(uriKey, list) }
+                val visible = visiblePhotosForGallery(uriKey, sorted)
                 coroutineContext.ensureActive()
                 if (generation != galleryEntryGeneration || currentUri != uriKey) return@launch
                 photoCache[uriKey] = visible
@@ -318,10 +327,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         photoRefreshJobs[uriKey] = viewModelScope.launch {
             val gallery = galleries.firstOrNull { it.uri.toString() == uriKey } ?: return@launch
             val currentCached = photoCache[uriKey] ?: cached
-            val list = visiblePhotosForGallery(
-                uriKey,
-                PhotoRepository.loadPhotos(getApplication(), gallery.uri, currentCached),
-            )
+            val scanned = PhotoRepository.loadPhotos(getApplication(), gallery.uri, currentCached)
+            val sorted = withContext(Dispatchers.Default) { sortPhotos(uriKey, scanned) }
+            val list = visiblePhotosForGallery(uriKey, sorted)
             val merged = mergePhotoLists(currentCached, list)
             photoCache[uriKey] = merged
             store.savePhotoCache(uriKey, merged)
@@ -382,6 +390,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun goHome() {
+        gallerySortGeneration += 1
+        gallerySortJob?.cancel()
+        sortingPhotos = false
         detailReturnPending = false
         galleryReturnPhotoID = null
         currentUri = null
@@ -668,7 +679,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             clearMovedInto(destKey, move.photo)
             val destList = ((photoCache[destKey] ?: store.loadPhotoCache(destKey)) + move.photo)
                 .distinctBy { it.uri }
-                .sortedWith(PHOTO_NEWEST_FIRST)
+                .sortedWith(sortOrder(destKey).comparator())
             photoCache[destKey] = destList
             store.savePhotoCache(destKey, destList)
             cacheOverview(destKey, destList)
@@ -714,7 +725,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         val uriKey = currentUri ?: return
         val restored = (photos + photosToRestore)
             .distinctBy { it.uri }
-            .sortedWith(PHOTO_NEWEST_FIRST)
+            .sortedWith(sortOrder(uriKey).comparator())
         photos = restored
         photoCache[uriKey] = restored
         store.savePhotoCache(uriKey, restored)
@@ -797,6 +808,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     fun closeSwitcher() { showSwitcher = false }
 
     fun openDetail(index: Int) {
+        if (sortingPhotos) return
         queuedDetailDeletePhotos.clear()
         galleryReturnPhotoID = null
         detailReturnPending = false
@@ -826,14 +838,47 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearMoveError() { moveError = null }
 
+    private fun sortOrder(uriKey: String): PhotoSortOrder =
+        galleries.firstOrNull { it.uri.toString() == uriKey }?.sortOrder ?: PhotoSortOrder.CAPTURE
+
+    private fun sortPhotos(uriKey: String, list: List<Photo>): List<Photo> =
+        list.sortedWith(sortOrder(uriKey).comparator())
+
+    fun togglePhotoSort() {
+        val gallery = currentGallery ?: return
+        if (loadingPhotos || sortingPhotos || selectedIndex != null) return
+        if (store.consumePhotoSortHint()) {
+            homeToast = PHOTO_SORT_HINT
+        }
+        val uriKey = gallery.uri.toString()
+        val next = gallery.sortOrder.next()
+        val source = photos
+        pauseGalleryThumbnails()
+        photoRefreshJobs.remove(uriKey)?.cancel()
+        dataRefreshJob?.cancel()
+        sortingPhotos = true
+        val generation = ++gallerySortGeneration
+        gallerySortJob = viewModelScope.launch {
+            try {
+                val ordered = withContext(Dispatchers.Default) { source.sortedWith(next.comparator()) }
+                if (currentUri != uriKey || generation != gallerySortGeneration) return@launch
+                galleries = galleries.map { if (it.uri.toString() == uriKey) it.copy(sortOrder = next) else it }
+                store.saveGalleries(galleries)
+                galleryReturnPhotoID = null
+                photos = ordered
+                photoCache[uriKey] = ordered
+                store.savePhotoCache(uriKey, ordered)
+                cacheOverview(uriKey, ordered)
+            } finally {
+                if (generation == gallerySortGeneration) sortingPhotos = false
+            }
+        }
+    }
+
     companion object {
+        const val PHOTO_SORT_HINT = "可切换按「拍摄时间」或「编辑时间」排序"
         private const val DELETE_TOMBSTONE_MILLIS = 120_000L
         private const val MOVE_TOMBSTONE_MILLIS = 45_000L
-        private val PHOTO_NEWEST_FIRST =
-            compareByDescending<Photo> { it.takenMillis }
-                .thenByDescending { it.modifiedMillis }
-                .thenBy { it.uri.toString() }
-
         private val HOME_SUBTITLES = listOf(
             "每一个画廊，都是你来时的路",
             "那些感动你的，那些你凝望的",

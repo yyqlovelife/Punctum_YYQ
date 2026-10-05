@@ -1,5 +1,17 @@
 # iOS 更新说明
 
+## 接续同步 · 2026-10-05（0.5.9/59 不再升号）
+
+已完成的图集排序与新用户开屏文案一并同步 GitHub。最新本地包为 `iOS/IPA/Punctum-0.5.9-onboarding-copy-unsigned.ipa`，包含下方排序功能和无句号开屏文案，ZIP 完整性已复核；此前排序版本 47 项 XCTest 与 Release 通过。本轮新进出动效仅在 Android 实现，iOS 真实图库交互待真机验证。下方未上传和旧包表述为历史阶段状态。
+
+## iOS 图集排序与 Android 对齐 · 2026-10-05
+
+新增各图集独立保存的「排序 · 拍摄／编辑」一点切换，放在「风格 · 原幅」上方，使用相同字号、字距与金色。两行分别与时间、照片数量按 firstTextBaseline 对齐。按键沿用点击下沉动效，切换后列表回顶部并短暂淡入；首次有效点击显示「可切换按「拍摄时间」或「编辑时间」排序」2 秒，已读状态跨重启保存。
+
+编辑模式按 PHAsset.modificationDate 最新在前，时间缺失回退已解析拍摄时间，同值比较拍摄时间与稳定 ID。完整图集顺序后台排序并固定给分页与大图浏览；取消删除、移动和刷新沿用当前模式。首页封面独立使用拍摄顺序，大图日期保持原拍摄时间。旧图库配置缺少排序字段时默认拍摄，保留原图集。9 月撤回的排序入口约束由本次明确需求取代。
+
+47 项 XCTest（新增 4 项排序与配置兼容测试）、Debug/Release 构建、IPA ZIP 与版本核验通过。iOS 仍为 0.5.9/59，包为 `iOS/IPA/Punctum-0.5.9-photo-sort-unsigned.ipa`，SHA256 `9c3539c218216921757f9a123ebfb432d435e47cc3da3b9ba013f76e8db0bcb9`。未签名，使用原 AltStore/AltServer 方式签名安装。本轮无 iPhone 真机，Mac 锁屏限制模拟器鼠标操作，排版、首次提示及真实图集分页仍待用户安装体验。未上传 Google Drive，源码尚未推送 GitHub。
+
 ## 未发版 · 2026-09-25（仅 iOS）
 
 ### 大图返回列表定位
@@ -363,3 +375,7 @@ iOS 首次与 Android 0.3.3 对齐（build `33`），以 `PHAssetCollection` 映
 - 首页按 `creationDate → modificationDate → localIdentifier` 排序；票据最新 1 张，明信片最新 4 张。
 - 删除经 `PHAssetChangeRequest.deleteAssets` 进入「最近删除」，并保留约 120 秒本地墓碑防止回弹。
 - 票据同步暖白纸纹、主色票根、内嵌相框、齿孔与 `CAPTURE` 编号。
+
+### 新用户开屏文案 · 2026-10-05
+
+Android 与 iOS 同步移除开屏句号。主标题改为「Select Exhibition」，两段正文依次为「选择一个图集，作为你的第一个画廊」「让每一次回望，都重新感受影像的重量」。保留现有颜色、字号及选择图集入口，长标题居中换行。

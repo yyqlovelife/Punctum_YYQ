@@ -47,11 +47,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
@@ -87,9 +92,11 @@ internal fun GalleryScreen(
     photos: List<Photo>,
     overview: GalleryOverview?,
     loading: Boolean,
+    sorting: Boolean,
     listState: LazyListState,
     onOpenSwitcher: () -> Unit,
     onRename: (Gallery) -> Unit,
+    onToggleSort: () -> Unit,
     onSelectPhoto: (Int) -> Unit,
     onDeletePhoto: (Photo) -> Unit,
     onWarmThumbnails: (Int, Int) -> Unit,
@@ -97,6 +104,16 @@ internal fun GalleryScreen(
     onContentReady: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val sortFade = remember(gallery.uri) { Animatable(1f) }
+    var previousSort by remember(gallery.uri) { mutableStateOf(gallery.sortOrder) }
+    LaunchedEffect(gallery.sortOrder) {
+        if (previousSort != gallery.sortOrder) {
+            previousSort = gallery.sortOrder
+            sortFade.snapTo(0.55f)
+            listState.scrollToItem(0)
+            sortFade.animateTo(1f, tween(160))
+        }
+    }
     val firstRowUris = photos.take(2).map { it.uri.toString() }.toSet()
     val firstRowKey = firstRowUris.joinToString("|")
     var readyFirstRowUris by remember(gallery.uri, firstRowKey) { mutableStateOf(emptySet<String>()) }
@@ -143,6 +160,8 @@ internal fun GalleryScreen(
                 timeSpan = overview?.timeSpan.orEmpty(),
                 onOpenSwitcher = onOpenSwitcher,
                 onRename = { onRename(gallery) },
+                sortingEnabled = !loading && !sorting,
+                onToggleSort = onToggleSort,
                 onDoubleTapTop = { scope.launch { listState.animateScrollToItem(0) } },
             )
         }
@@ -184,8 +203,9 @@ internal fun GalleryScreen(
                 OriginalRatioRow(
                     row = row,
                     rowStartIndex = rowStartIndex,
-                    onSelectPhoto = onSelectPhoto,
-                    onDeletePhoto = onDeletePhoto,
+                    onSelectPhoto = { if (!sorting) onSelectPhoto(it) },
+                    onDeletePhoto = { if (!sorting) onDeletePhoto(it) },
+                    modifier = Modifier.graphicsLayer { alpha = sortFade.value },
                     onPhotoReady = { photo ->
                         val uriKey = photo.uri.toString()
                         if (uriKey in firstRowUris && uriKey !in readyFirstRowUris) {
@@ -326,7 +346,7 @@ private fun OriginalRatioRow(
                             android.util.Log.d(tag, "geometry id=${photo.uri.hashCode()} stage=${if (imageModel.data is java.io.File) "hq" else "preview"} image=${width}x$height photo=${photo.width}x${photo.height}")
                         }
                     },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.sharedPhotoMotion(photo.uri.toString(), detail = false).fillMaxSize(),
                 )
                 if (showDeleteProgress) {
                     Box(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
@@ -391,8 +411,17 @@ private fun GalleryHeader(
     timeSpan: String,
     onOpenSwitcher: () -> Unit,
     onRename: () -> Unit,
+    sortingEnabled: Boolean,
+    onToggleSort: () -> Unit,
     onDoubleTapTop: () -> Unit,
 ) {
+    val density = LocalDensity.current
+    // Some devices report a changing hidden-bar inset. Keep the landing geometry
+    // unchanged for the whole gallery visit, including the shared-image return.
+    val statusBars = WindowInsets.statusBarsIgnoringVisibility
+    val statusBarTop = remember(gallery.uri) {
+        with(density) { statusBars.getTop(density).toDp() }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -401,7 +430,7 @@ private fun GalleryHeader(
             }
             // DetailScreen temporarily hides the status bar. Keep the gallery header's inset
             // stable underneath it so the title does not jump down when the status bar returns.
-            .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
+            .padding(top = statusBarTop)
             .padding(start = 24.dp, end = 12.dp, top = 18.dp, bottom = 16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -410,8 +439,7 @@ private fun GalleryHeader(
                     .punctumPressable(
                         activateImmediatelyOnRelease = true,
                         onClick = onOpenSwitcher,
-                    )
-                    .padding(vertical = 6.dp),
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -427,6 +455,7 @@ private fun GalleryHeader(
             IconButton(onClick = onRename) {
                 Icon(Icons.Outlined.Edit, contentDescription = "重命名", tint = Muted)
             }
+
         }
 
         Spacer(Modifier.height(14.dp))
@@ -436,22 +465,51 @@ private fun GalleryHeader(
             color = Bone,
         )
         Spacer(Modifier.height(14.dp))
-        if (timeSpan.isNotBlank()) {
-            Text(timeSpan, style = MaterialTheme.typography.bodyMedium, color = Muted)
-            Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (timeSpan.isNotBlank()) {
+                Text(
+                    timeSpan,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Muted,
+                    modifier = Modifier.alignByBaseline(),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                "排序 · ${gallery.sortOrder.label}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Gold.copy(alpha = 0.8f),
+                modifier = Modifier
+                    .alignByBaseline()
+                    .semantics {
+                        contentDescription = "照片排序"
+                        stateDescription = "按${gallery.sortOrder.label}时间排序，最新在前"
+                    }
+                    .punctumPressable(
+                        enabled = sortingEnabled,
+                        activateImmediatelyOnRelease = true,
+                        onClick = onToggleSort,
+                    ),
+            )
         }
+        Spacer(Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(end = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 "关于 $count 幅作品的故事",
+                modifier = Modifier.alignByBaseline(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = Muted,
             )
             Spacer(Modifier.weight(1f))
             Text(
                 "风格 · ${GalleryStyle.from(gallery.styleId).label}",
+                modifier = Modifier.alignByBaseline(),
                 style = MaterialTheme.typography.labelSmall,
                 color = Gold.copy(alpha = 0.8f),
             )

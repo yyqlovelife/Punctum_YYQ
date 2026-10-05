@@ -5,6 +5,7 @@ import android.net.Uri
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
 import com.punctum.gallery.model.Photo
+import com.punctum.gallery.model.PhotoSortOrder
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -13,6 +14,12 @@ class GalleryStore(context: Context) {
 
     private val prefs = context.applicationContext
         .getSharedPreferences("punctum_galleries", Context.MODE_PRIVATE)
+
+    fun consumePhotoSortHint(): Boolean {
+        if (prefs.getBoolean("photo_sort_hint_seen", false)) return false
+        prefs.edit().putBoolean("photo_sort_hint_seen", true).apply()
+        return true
+    }
 
     fun loadGalleries(): List<Gallery> {
         val raw = prefs.getString(KEY_GALLERIES, null) ?: return emptyList()
@@ -24,6 +31,7 @@ class GalleryStore(context: Context) {
                     uri = Uri.parse(o.getString("uri")),
                     displayName = o.getString("name"),
                     styleId = o.optString("style", "original"),
+                    sortOrder = PhotoSortOrder.from(o.optString("sort")),
                 )
             }
         } catch (e: Exception) {
@@ -38,6 +46,7 @@ class GalleryStore(context: Context) {
                 put("uri", g.uri.toString())
                 put("name", g.displayName)
                 put("style", g.styleId)
+                put("sort", g.sortOrder.id)
             })
         }
         prefs.edit().putString(KEY_GALLERIES, arr.toString()).apply()

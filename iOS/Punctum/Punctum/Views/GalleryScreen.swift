@@ -8,11 +8,14 @@ struct GalleryScreen: View {
     let isLoading: Bool
     let onOpenSwitcher: () -> Void
     let onRename: () -> Void
+    let sortingEnabled: Bool
+    let onToggleSort: () -> Void
     let onSelectPhoto: (Int, PhotoMetadata, Set<String>) -> Void
     let onDeletePhoto: (PhotoItem) -> Void
     let returnTargetID: String?
     let onReturnPositioned: (String) -> Void
     var onLoadMore: () -> Void = {}
+    @State private var sortOpacity = 1.0
     @State private var visiblePhotoIDs: Set<String> = []
 
     var body: some View {
@@ -25,7 +28,9 @@ struct GalleryScreen: View {
                         count: overview?.count ?? photos.count,
                         timeSpan: overview?.timeSpan ?? "",
                         onOpenSwitcher: onOpenSwitcher,
-                        onRename: onRename
+                        onRename: onRename,
+                        sortingEnabled: sortingEnabled,
+                        onToggleSort: onToggleSort
                     )
                     .id("gallery-header")
                     .onTapGesture(count: 2) {
@@ -66,6 +71,7 @@ struct GalleryScreen: View {
                                     )
                                 }
                             }
+                            .opacity(sortOpacity)
                             .id(photos[index].id)
                             .onAppear {
                                 if index + 4 >= photos.count {
@@ -86,6 +92,15 @@ struct GalleryScreen: View {
                     )
                     let ids = Set(indices.map { photos[$0].id })
                     if ids != visiblePhotoIDs { visiblePhotoIDs = ids }
+                }
+                .onChange(of: gallery.sortOrder) { _, _ in
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        reader.scrollTo("gallery-header", anchor: .top)
+                        sortOpacity = 0.55
+                    }
+                    withAnimation(.easeOut(duration: 0.16)) { sortOpacity = 1 }
                 }
                 .onChange(of: returnTargetID) { _, targetID in
                     guard let targetID else { return }
@@ -126,6 +141,8 @@ private struct GalleryHeader: View {
     let timeSpan: String
     let onOpenSwitcher: () -> Void
     let onRename: () -> Void
+    let sortingEnabled: Bool
+    let onToggleSort: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -159,14 +176,29 @@ private struct GalleryHeader: View {
                 .foregroundStyle(PunctumTheme.bone)
                 .padding(.top, 14)
 
-            if !timeSpan.isEmpty {
-                Text(timeSpan)
-                    .font(PunctumTheme.serifSC(15))
-                    .foregroundStyle(PunctumTheme.muted)
-                    .padding(.top, 14)
+            HStack(alignment: .firstTextBaseline) {
+                if !timeSpan.isEmpty {
+                    Text(timeSpan)
+                        .font(PunctumTheme.serifSC(15))
+                        .foregroundStyle(PunctumTheme.muted)
+                }
+                Spacer()
+                Button(action: onToggleSort) {
+                    Text("排序 · \(gallery.sortOrder.label)")
+                        .font(PunctumTheme.georgia(12, bold: true))
+                        .tracking(1.2)
+                        .foregroundStyle(PunctumTheme.gold.opacity(0.8))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(IconPressButtonStyle())
+                .disabled(!sortingEnabled)
+                .accessibilityLabel("排序 · \(gallery.sortOrder.label)")
+                .accessibilityValue("按\(gallery.sortOrder.label)时间排序，最新在前")
             }
+            .padding(.top, 14)
+            .padding(.trailing, 12)
 
-            HStack(alignment: .center) {
+            HStack(alignment: .firstTextBaseline) {
                 Text("关于 \(count) 幅作品的故事")
                     .font(PunctumTheme.serifSC(15))
                     .foregroundStyle(PunctumTheme.muted)
@@ -176,7 +208,7 @@ private struct GalleryHeader: View {
                     .tracking(1.2)
                     .foregroundStyle(PunctumTheme.gold.opacity(0.8))
             }
-            .padding(.top, timeSpan.isEmpty ? 14 : 6)
+            .padding(.top, 6)
             .padding(.trailing, 12)
 
             HairlineDivider()
