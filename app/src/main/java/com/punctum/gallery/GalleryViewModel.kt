@@ -283,8 +283,12 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                 if (generation != galleryEntryGeneration || currentUri != uriKey) return@launch
                 // On first entry do a single full scan, avoiding a second EXIF pass
                 // solely to obtain four cover photos before the real list load.
-                val list = if (cached.isNotEmpty()) cached else {
-                    PhotoRepository.loadPhotos(getApplication(), gallery.uri)
+                val list = if (cached.isNotEmpty() && PhotoRepository.hasCaptureTimeCache(cached)) {
+                    withContext(Dispatchers.Default) {
+                        PhotoRepository.normalizeCachedCaptureTimes(cached)
+                    }
+                } else {
+                    PhotoRepository.loadPhotos(getApplication(), gallery.uri, cached)
                 }
                 val visible = visiblePhotosForGallery(uriKey, list)
                 coroutineContext.ensureActive()
@@ -405,7 +409,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             // 每个画廊只扫描一次，并行按 EXIF 拍摄时间计算数量、跨度和前 4 张封面。
-            // 已有照片复用 v3 元数据缓存，只为新增或发生变化的文件重新读取 EXIF。
+            // 已有照片复用当前元数据缓存；旧缓存按需核对 EXIF 拍摄时间。
             coroutineScope {
                 gallerySnapshot.forEach { gallery ->
                     launch {

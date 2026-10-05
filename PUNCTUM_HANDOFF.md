@@ -1,5 +1,37 @@
 # Punctum 开发交接
 
+## 近期维护同步 · 2026-10-05（版本不变）
+
+Android 保持 **0.5.8/58**，iOS 保持 **0.5.9/59**。本次同步近期修复及说明，不升版本。
+
+- Android 中文地名：请求并保留简体中文地名；照片位置权限后来获准时，旧空 GPS 缓存可重新读取。文件本身缺少 GPS 时仍无法补出坐标，中文地名服务覆盖率继续观察。
+- Android 大图版式：已撤回去除 `No.xx` 的试验，保留用户接受的原编号、字号与时间地点位置。
+- Android 拍摄时间：所有来源统一优先文件原始 EXIF 时间，大图显示、列表倒序、首页封面及时间跨度一致；旧缓存核验后展示。Phocus 500 张、DJI Album 255 张在 PMA110 上逐张通过，修复后时间不匹配与列表逆序均为 0；23 项单测、Release、Lint、签名通过。
+- 当前 APK `APK/Punctum-0.5.8-original-capture-time.apk` 已保留数据覆盖安装 PMA110，手机与本地 SHA256 同为 `4682d62e3c5da7978cc2c4f0af7b061a68b382367cb377e6c6cd35c8325dc715`，已上传 Google Drive。
+- iOS 延续 9 月 25 日状态：43 项 XCTest/Release 通过；首页冷启动滑动已获用户确认，最新封面、进入与返回定位仍待 iPhone 真机复测。本轮未改 iOS 代码。
+
+详见 [新对话交接](SESSION_HANDOFF_2026-10-05.md)、[开发交接](PUNCTUM_HANDOFF.md)及 [Android 真机摘要](docs/ANDROID_CAPTURE_TIME_VALIDATION_2026-10-05.md)。源码、测试和文档同步 GitHub；安装包、签名资料、原始照片元数据与设备抓取留在本地/Drive。
+
+## Android 外部相机原始拍摄时间 · 2026-10-05（真机已核验）
+
+PMA110 上的 10 月 2 日包与当时本地哈希一致，逐张对照 Phocus_Exported 500 张、DJI Album 255 张的 EXIF 后，发现旧包仍有 182/50 张选错系统时间。已撤销导入时间的 5 分钟判断，所有 Android 来源统一优先文件 DateTimeOriginal/DateTimeDigitized；只有缺少原始时间才回退 MediaStore。缓存保留原始时间；v4 缓存在首帧展示前重新解析选择结果并排序，旧缓存先核验再展示。系统相册修改日期若与文件 EXIF 冲突，按用户“真正设备拍摄时间”要求采用 EXIF。
+
+已覆盖安装并实测：755 张应用时间全部匹配原文件，两个图集倒序均无逆序。问题照片哈苏 14:17→14:02，DJI 08:58→08:43；23 项单测、Release、Lint 通过。设备原始验证数据保留在忽略目录；摘要见 `docs/ANDROID_CAPTURE_TIME_VALIDATION_2026-10-05.md`。下方 10 月 2 日规则及包是历史记录。
+
+最终包 `APK/Punctum-0.5.8-original-capture-time.apk`，SHA256 `4682d62e3c5da7978cc2c4f0af7b061a68b382367cb377e6c6cd35c8325dc715`；已保留数据覆盖安装 PMA110，手机内 APK 哈希与本地一致，签名通过，已上传 [Google Drive](https://drive.google.com/file/d/1ynjBKkkOsgJli0pb8MXZZlxS3LzGlXDu/view?usp=drivesdk) 并核对文件大小。临时核验工具已卸载。
+
+## Android 相机导出照片拍摄时间 · 2026-10-02
+
+修复大图页与列表把相机 APP 导出时间当成拍摄时间：系统 MediaStore 的 DATE_TAKEN 若与 DATE_ADDED 或 DATE_MODIFIED 接近，而与 EXIF DateTimeOriginal/DateTimeDigitized 明显不同，则显示、排序、封面选择均采用 EXIF 拍摄时间；明确改成其他日期的系统相册时间继续生效。Photo 缓存记录 EXIF 原始时间，旧 v3 缓存升级至 v4 时重新读取，避免旧的错误时间持续出现。文件缺少可靠 EXIF 时回退系统时间。21 项单测、Release、Lint、签名通过；`APK/Punctum-0.5.8-capture-time.apk` SHA256 `29b90e5329c54d5bc7a0f756563f6544dcdcb6d56fcf6cb893f5633bafa06e5a` 已上传 [Google Drive](https://drive.google.com/file/d/1mmX-Q7_3tVGzoyYOUD1X0c9H5lE--czn/view?usp=drivesdk)。无手机连接，仍需用户以原哈苏图集验证真实文件。
+
+## Android 大图页版式回退 · 2026-10-02
+
+用户试用去除 `No.xx` 的版式后更喜欢原版。Android 大图页已恢复原有编号、字号、编号下方 18dp 间距及地点/时间位置；删除、移动与翻页过渡也恢复同一布局。2026-09-28 中文地名和位置缓存改动保留，版本仍为 0.5.8/58。19 项单测、Release、Lint、签名通过。最新包 `APK/Punctum-0.5.8-number-restored.apk`，SHA256 `ed328d0f8a9d257a104e479223c48a3003455ce065c34815f2ffcee9444bdb92`，与试验前中文地名版逐字节一致，已上传用户 Google Drive。`no-number-detail` 包只作为历史试验，不再使用。
+
+## Android 大图中文地名与坐标缓存 · 2026-09-28
+
+大图页逆地理编码改为请求简体中文并保留中文结果；无可用地名时继续显示坐标。原始照片位置权限后来获准时，旧的空坐标缓存会重新读 EXIF；有坐标的缓存继续复用，避免重复扫描。没有嵌入 GPS 的照片仍需另行提供位置数据。仅本地 Android 增量，版本仍为 0.5.8/58；19 项单测、Release、Lint、签名通过。最新本地包 `APK/Punctum-0.5.8-chinese-location.apk` 已保留数据安装 PMA110，设备内包与本地 SHA256 同为 `ed328d0f8a9d257a104e479223c48a3003455ce065c34815f2ffcee9444bdb92`；实际中文地名返回结果待验。
+
 ## Android 图集排序反复跳闪修复 · 2026-09-25（待原图集真机复测）
 
 系统相册批量改图、改拍摄时间后，Android 图集每 3 秒刷新时会把旧缓存时间参与临时排序，再用完整扫描结果改回新顺序，形成持续往返跳动。已删除临时排序发布，完整扫描后一次更新；系统图集以当前 MediaStore 拍摄时间覆盖旧缓存，同尺寸照片的其他新元数据也能生效。图集页的后台刷新只处理当前图集。19 项单测、Release、Lint 和 APK 签名通过；本地包 `APK/Punctum-0.5.8-sort-stability.apk`，SHA256 `5f7a5ddddfe36bc4ced8621f8d8bc3761c4b33f51b897bcf886223f9819ac89f`，版本 0.5.8/58。用户远程安装后反馈目前状态不错；本轮无法直接读取手机日志，长期稳定性继续观察。APK 已上传用户 Google Drive；源码、测试和文档的 GitHub 状态见根目录当前交接。

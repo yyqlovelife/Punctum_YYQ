@@ -135,6 +135,7 @@ class GalleryStore(context: Context) {
                 width = obj.optInt("width", 0),
                 height = obj.optInt("height", 0),
                 takenMillis = obj.optLong("takenMillis", 0L),
+                exifTakenMillis = obj.optLong("exifTakenMillis", 0L).takeIf { it > 0L },
                 dateTaken = obj.optString("dateTaken").ifBlank { null },
                 latLong = if (lat != null && lon != null) doubleArrayOf(lat, lon) else null,
                 gpsReadAttempted = obj.optBoolean("gpsReadAttempted", false),
@@ -175,6 +176,7 @@ class GalleryStore(context: Context) {
                 put("width", p.width)
                 put("height", p.height)
                 put("takenMillis", p.takenMillis)
+                p.exifTakenMillis?.let { put("exifTakenMillis", it) }
                 put("dateTaken", p.dateTaken)
                 p.latLong?.let {
                     put("lat", it[0])

@@ -142,18 +142,16 @@ object PhotoRepository {
         cachedPhotos: List<Photo> = emptyList(),
     ): List<Photo> =
         withContext(Dispatchers.IO) {
-            val systemAlbum = SystemAlbum.isAlbumUri(gallery.uri)
             sortFilesByCaptureTime(
                 context = context,
                 files = scanFiles(context, gallery.uri),
                 cachedPhotos = cachedPhotos,
-                preferMediaStoreDate = systemAlbum,
             ).take(COVER_COUNT).map { (file, _) ->
                 val photo = readPhoto(
                     context = context,
                     uri = file.uri,
                     name = file.name,
-                    fallbackTime = file.takenMillis ?: file.modifiedMillis,
+                    mediaStoreMillis = file.takenMillis,
                     fileSizeBytes = file.sizeBytes,
                     modifiedMillis = file.modifiedMillis,
                     thumbnailPath = GalleryImageCache.cachedThumbnailPath(
@@ -166,7 +164,7 @@ object PhotoRepository {
                         file.motionPhotoPresentationTimestampUs,
                     motionPhotoChecked = file.motionPhotoChecked,
                 )
-                if (systemAlbum) photo.withSystemCaptureTime(file.takenMillis) else photo
+                photo
             }.sortedWith(PHOTO_NEWEST_FIRST)
         }
 
@@ -175,7 +173,6 @@ object PhotoRepository {
             val galleryKey = treeUri.toString()
             val cachedByUri = cachedPhotos.associateBy { it.uri.toString() }
             val cachedBySignature = cachedPhotos.associateBy { "${it.name}|${it.fileSizeBytes}" }
-            val systemAlbum = SystemAlbum.isAlbumUri(treeUri)
             val files = scanFiles(context, treeUri)
             val photos = files.map { file ->
                 coroutineContext.ensureActive()
@@ -183,22 +180,27 @@ object PhotoRepository {
                     ?: cachedBySignature["${file.name}|${file.sizeBytes}"]
                 if (cached != null &&
                     cachedMatchesFile(cached, file) &&
-                    cached.metadataVersion >= METADATA_VERSION
+                    cached.metadataVersion >= 3 &&
+                    (!canReadUnredactedGps(context, file.uri) || cached.gpsReadAttempted || cached.latLong != null)
                 ) {
                     val targetThumb = GalleryImageCache.cachedThumbnailPath(context, galleryKey, file.uri)
-                    val resolvedTakenMillis = if (systemAlbum) {
-                        authoritativeSystemCaptureMillis(file.takenMillis, cached.takenMillis)
+                    val exifMillis = if (cached.metadataVersion >= METADATA_VERSION) {
+                        cached.exifTakenMillis
                     } else {
-                        cached.takenMillis.takeIf { it > 0L }
-                            ?: file.takenMillis
-                            ?: file.modifiedMillis
+                        readExifOriginalMillis(context, file.uri)
                     }
+                    val resolvedTakenMillis = resolveCaptureMillis(
+                        file.takenMillis, exifMillis, file.modifiedMillis,
+                        cached.takenMillis,
+                    )
                     cached.copy(
                         uri = file.uri,
                         modifiedMillis = file.modifiedMillis,
                         fileSizeBytes = file.sizeBytes,
                         takenMillis = resolvedTakenMillis,
+                        exifTakenMillis = exifMillis,
                         dateTaken = formatDate(resolvedTakenMillis),
+                        metadataVersion = METADATA_VERSION,
                         thumbnailPath = targetThumb,
                         motionPhotoVideoLength = if (file.motionPhotoChecked) {
                             file.motionPhotoVideoLength
@@ -219,16 +221,16 @@ object PhotoRepository {
                         context = context,
                         uri = file.uri,
                         name = file.name,
-                        fallbackTime = file.takenMillis ?: file.modifiedMillis,
+                        mediaStoreMillis = file.takenMillis,
                         fileSizeBytes = file.sizeBytes,
                         modifiedMillis = file.modifiedMillis,
-                        thumbnailPath = GalleryImageCache.cachedThumbnailPath(context, galleryKey, file.uri),
+                            thumbnailPath = GalleryImageCache.cachedThumbnailPath(context, galleryKey, file.uri),
                         motionPhotoVideoLength = file.motionPhotoVideoLength,
                         motionPhotoPresentationTimestampUs =
                             file.motionPhotoPresentationTimestampUs,
                         motionPhotoChecked = file.motionPhotoChecked,
                     )
-                    if (systemAlbum) photo.withSystemCaptureTime(file.takenMillis) else photo
+                    photo
                 }
             }
             photos.sortedWith(PHOTO_NEWEST_FIRST)
@@ -253,7 +255,6 @@ object PhotoRepository {
                 context = context,
                 files = files,
                 cachedPhotos = cachedPhotos,
-                preferMediaStoreDate = SystemAlbum.isAlbumUri(gallery.uri),
             )
             val times = datedFiles.map { it.second }.sorted()
             val covers = datedFiles.take(COVER_COUNT).map { it.first.uri }
@@ -317,7 +318,7 @@ object PhotoRepository {
         withContext(Dispatchers.IO) {
             try {
                 if (!Geocoder.isPresent()) return@withContext null
-                val geocoder = Geocoder(context, Locale.ENGLISH)
+                val geocoder = Geocoder(context, Locale.SIMPLIFIED_CHINESE)
                 val results = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     suspendCancellableCoroutine { continuation ->
                         geocoder.getFromLocation(lat, lon, 1) { addresses ->
@@ -333,7 +334,6 @@ object PhotoRepository {
                         .distinct()
                         .joinToString(" · ")
                         .ifBlank { null }
-                        ?.takeUnless { containsChinese(it) }
                 }
             } catch (e: Exception) {
                 null
@@ -564,7 +564,6 @@ object PhotoRepository {
         context: Context,
         files: List<PhotoFile>,
         cachedPhotos: List<Photo>,
-        preferMediaStoreDate: Boolean = false,
     ): List<Pair<PhotoFile, Long>> {
         val cachedByUri = cachedPhotos.associateBy { it.uri.toString() }
         val cachedBySignature = cachedPhotos.associateBy {
@@ -575,21 +574,19 @@ object PhotoRepository {
                 async {
                     val cached = cachedByUri[file.uri.toString()]
                         ?: cachedBySignature["${file.name}|${file.sizeBytes}"]
-                    val cachedTakenMillis = cached
+                    val reusable = cached
                         ?.takeIf {
                             cachedMatchesFile(it, file) &&
                                 it.metadataVersion >= METADATA_VERSION
                         }
-                        ?.takenMillis
-                        ?.takeIf { it > 0L }
-                    val fallback = file.takenMillis ?: file.modifiedMillis
-                    file to (
-                        (if (preferMediaStoreDate) file.takenMillis else null)
-                            ?: cachedTakenMillis
-                            ?: exifReadSemaphore.withPermit {
-                                readTakenMillis(context, file.uri, fallback)
-                            }
-                        )
+                    val exifMillis = reusable?.exifTakenMillis
+                        ?: if (reusable == null) exifReadSemaphore.withPermit {
+                            readExifOriginalMillis(context, file.uri)
+                        } else null
+                    file to resolveCaptureMillis(
+                        file.takenMillis, exifMillis, file.modifiedMillis,
+                        reusable?.takenMillis ?: 0L,
+                    )
                 }
             }.awaitAll()
         }.sortedWith(
@@ -599,17 +596,14 @@ object PhotoRepository {
         )
     }
 
-    private fun readTakenMillis(context: Context, uri: Uri, fallback: Long): Long {
+    private fun readExifOriginalMillis(context: Context, uri: Uri): Long? {
         return try {
             openExifInputStream(context, uri)?.use { s ->
                 val exif = ExifInterface(s)
-                parseExifMillis(
-                    exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
-                        ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-                ) ?: fallback
-            } ?: fallback
+                exifCaptureMillis(exif)
+            }
         } catch (e: Exception) {
-            fallback
+            null
         }
     }
 
@@ -617,7 +611,7 @@ object PhotoRepository {
         context: Context,
         uri: Uri,
         name: String,
-        fallbackTime: Long,
+        mediaStoreMillis: Long?,
         fileSizeBytes: Long,
         modifiedMillis: Long,
         thumbnailPath: String?,
@@ -628,7 +622,8 @@ object PhotoRepository {
         var width = 0
         var height = 0
         var rotation = 0
-        var millis = fallbackTime
+        var millis = mediaStoreMillis ?: modifiedMillis
+        var exifTakenMillis: Long? = null
         var latLong: DoubleArray? = null
         var shutter: String? = null
         var iso: String? = null
@@ -647,10 +642,11 @@ object PhotoRepository {
             openExifInputStream(context, uri)?.use { s ->
                 val exif = ExifInterface(s)
                 rotation = exif.rotationDegrees
-                parseExifMillis(
-                    exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
-                        ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-                )?.let { millis = it }
+                exifTakenMillis = exifCaptureMillis(exif)
+                millis = resolveCaptureMillis(
+                    mediaStoreMillis, exifTakenMillis, modifiedMillis,
+                    parseExifMillis(exif.getAttribute(ExifInterface.TAG_DATETIME)) ?: 0L,
+                )
                 latLong = exif.latLong
                 val exposure = exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0.0)
                 val fNumber = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0)
@@ -690,6 +686,7 @@ object PhotoRepository {
             width = width,
             height = height,
             takenMillis = millis,
+            exifTakenMillis = exifTakenMillis,
             dateTaken = formatDate(millis),
             latLong = latLong,
             gpsReadAttempted = gpsReadAttempted,
@@ -976,8 +973,9 @@ object PhotoRepository {
         }
     }
 
-    private fun containsChinese(text: String): Boolean =
-        text.any { it.code in 0x4E00..0x9FFF }
+    private fun exifCaptureMillis(exif: ExifInterface): Long? =
+        parseExifMillis(exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL))
+            ?: parseExifMillis(exif.getAttribute(ExifInterface.TAG_DATETIME_DIGITIZED))
 
     private fun formatDevice(makeRaw: String?, modelRaw: String?): String? {
         val make = cleanExifText(makeRaw)
@@ -1004,13 +1002,18 @@ object PhotoRepository {
             .thenByDescending { it.modifiedMillis }
             .thenBy { it.uri.toString() }
 
-    private fun Photo.withSystemCaptureTime(mediaStoreMillis: Long?): Photo {
-        val resolved = authoritativeSystemCaptureMillis(mediaStoreMillis, takenMillis)
-        return if (resolved == takenMillis) this else copy(
-            takenMillis = resolved,
-            dateTaken = formatDate(resolved),
-        )
-    }
+    /** Correct v4's resolved date before publishing a cached list; keep the fast entry path. */
+    fun hasCaptureTimeCache(photos: List<Photo>): Boolean =
+        photos.all { it.metadataVersion >= METADATA_VERSION }
+
+    fun normalizeCachedCaptureTimes(photos: List<Photo>): List<Photo> =
+        photos.map { photo ->
+            val original = photo.exifTakenMillis?.takeIf { it > 0L }
+            if (original == null || original == photo.takenMillis) photo else photo.copy(
+                takenMillis = original,
+                dateTaken = formatDate(original),
+            )
+        }.sortedWith(PHOTO_NEWEST_FIRST)
 
     private fun formatDate(millis: Long): String? {
         if (millis <= 0L) return null
@@ -1041,13 +1044,21 @@ object PhotoRepository {
         else String.format(Locale.US, "%.1f", value)
 
     private const val COVER_COUNT = 4
-    private const val METADATA_VERSION = 3
+    private const val METADATA_VERSION = 4
     private const val FILE_TIME_TOLERANCE_MILLIS = 1_500L
     private const val OPLUS_IS_LIVE_PHOTO = "o_is_live_photo"
     private const val OPLUS_VIDEO_SIZE = "o_video_size"
     private const val OPLUS_COVER_TIMESTAMP_US = "o_cover_time_stamps"
 }
 
-/** The system gallery can change DATE_TAKEN without changing image bytes or DATE_MODIFIED. */
-internal fun authoritativeSystemCaptureMillis(mediaStoreMillis: Long?, cachedOrExifMillis: Long): Long =
-    mediaStoreMillis?.takeIf { it > 0L } ?: cachedOrExifMillis
+/** Original camera capture time is authoritative; MediaStore may contain import or edited dates. */
+internal fun resolveCaptureMillis(
+    mediaStoreMillis: Long?,
+    exifOriginalMillis: Long?,
+    modifiedMillis: Long,
+    fallbackMillis: Long = 0L,
+): Long {
+    val media = mediaStoreMillis?.takeIf { it > 0L }
+    val exif = exifOriginalMillis?.takeIf { it > 0L }
+    return exif ?: media ?: fallbackMillis.takeIf { it > 0L } ?: modifiedMillis
+}

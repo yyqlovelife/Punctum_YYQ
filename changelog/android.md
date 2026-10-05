@@ -1,5 +1,25 @@
 # Android 更新说明
 
+## 未发版 · 2026-10-05（外部相机原始拍摄时间，真机通过）
+
+在 PMA110 上逐张核对 Phocus_Exported 500 张和 DJI Album 255 张文件（含 4 张 DNG）。旧版仍有 182 张哈苏、50 张 DJI 照片选用了系统时间；上轮“接近导入时间”的判断不完整。本次统一直接优先 EXIF DateTimeOriginal，再使用 DateTimeDigitized，缺失时才回退到媒体库/文件时间。缓存已有 EXIF 时在展示列表前立即修正时间并排序；旧缓存未读原始时间时先完成核对，沿用可取消的加载提示。首页封面、跨度、大图与列表共用同一规则，取代 10 月 2 日的条件判断。
+
+真机保存的 755 张时间与原文件 EXIF 全部一致，两个列表的拍摄时间倒序均无逆序。大图页实测：哈苏问题照片由 14:17 恢复为 14:02；DJI 问题照片由 08:58 恢复为 08:43。23 项单测、Release、Lint 通过。完整核验摘要见 `docs/ANDROID_CAPTURE_TIME_VALIDATION_2026-10-05.md`；原始照片元数据和设备记录在忽略的本地验证目录。
+
+最终包 `APK/Punctum-0.5.8-original-capture-time.apk`，SHA256 `4682d62e3c5da7978cc2c4f0af7b061a68b382367cb377e6c6cd35c8325dc715`；已保留数据覆盖安装 PMA110，手机内 APK 哈希与本地一致，签名通过，已上传 [Google Drive](https://drive.google.com/file/d/1ynjBKkkOsgJli0pb8MXZZlxS3LzGlXDu/view?usp=drivesdk) 并核对文件大小。临时核验工具已卸载。
+
+## 未发版 · 2026-10-02（拍摄时间修复）
+
+修复相机 APP 导出照片后，系统媒体库将导出时间写作照片时间，导致大图标注及列表排序都偏到导出日期的问题。现在对照文件内 EXIF 原始拍摄时间与媒体库的拍摄、导入、文件修改时间；媒体库时间明显来自导入时，采用 EXIF 原始拍摄时间；用户在系统相册另行调整过的拍摄日期继续遵循媒体库。旧缓存会重新读取并保存 EXIF 原始时间，首页封面和图集列表使用同一规则。文件没有可靠的原始拍摄时间时仍只能使用媒体库或文件时间。21 项单测、Release、Lint 和 APK 签名通过。包为 `APK/Punctum-0.5.8-capture-time.apk`，SHA256 `29b90e5329c54d5bc7a0f756563f6544dcdcb6d56fcf6cb893f5633bafa06e5a`，已上传 [Google Drive](https://drive.google.com/file/d/1mmX-Q7_3tVGzoyYOUD1X0c9H5lE--czn/view?usp=drivesdk)。无手机连接，哈苏原片的实际元数据待真机核验。
+
+## 未发版 · 2026-10-02（仅 Android）
+
+曾试用移除 `No.xx` 并把地点与时间上移的版式；用户反馈原布局更好，已撤回。当前大图页恢复 `No.xx`、原编号字号、编号下方 18dp 间距，以及地点与时间原本的字号和位置。2026-09-28 的中文地名与位置缓存修复继续保留。版本保持 0.5.8/58；19 项单测、Release、Lint 与签名通过。最新包 `APK/Punctum-0.5.8-number-restored.apk`，SHA256 `ed328d0f8a9d257a104e479223c48a3003455ce065c34815f2ffcee9444bdb92`，与去编号试验前的中文地名版逐字节一致，已上传用户 Google Drive。之前上传的 `no-number-detail` 包只作为历史试验，不再使用。
+
+## 未发版 · 2026-09-28（仅 Android）
+
+大图页定位现在请求中文地名，并保留系统返回的中文结果；地名服务无法解析时仍显示已有经纬度。获得照片位置权限后，先前因权限不足而缓存为空坐标的照片会重新读取原始元数据，已有坐标的缓存继续复用。缺少文件内 GPS 的照片仍需外部位置来源，无法通过地名反查补出坐标。版本保持 0.5.8/58。19 项单测、Release、Lint 与 APK 签名检查通过；`APK/Punctum-0.5.8-chinese-location.apk` 已保留数据安装至 PMA110，手机内 APK 的 SHA256 与本地一致：`ed328d0f8a9d257a104e479223c48a3003455ce065c34815f2ffcee9444bdb92`。实际中文地名返回待用户在有坐标的照片上观察。
+
 ## 未发版 · 2026-09-25（仅 Android）
 
 ### 图集拍摄时间变更后的排序稳定性

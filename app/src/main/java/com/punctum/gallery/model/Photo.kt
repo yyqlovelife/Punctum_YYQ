@@ -10,6 +10,7 @@ data class Photo(
     val width: Int = 0,
     val height: Int = 0,
     val takenMillis: Long = 0L,
+    val exifTakenMillis: Long? = null,
     val dateTaken: String? = null,
     val latLong: DoubleArray? = null,
     val gpsReadAttempted: Boolean = false,
@@ -66,6 +67,7 @@ data class Photo(
             width == other.width &&
             height == other.height &&
             takenMillis == other.takenMillis &&
+            exifTakenMillis == other.exifTakenMillis &&
             dateTaken == other.dateTaken &&
             latLong.contentEqualsNullable(other.latLong) &&
             gpsReadAttempted == other.gpsReadAttempted &&
@@ -90,6 +92,7 @@ data class Photo(
         result = 31 * result + width
         result = 31 * result + height
         result = 31 * result + takenMillis.hashCode()
+        result = 31 * result + (exifTakenMillis?.hashCode() ?: 0)
         result = 31 * result + (dateTaken?.hashCode() ?: 0)
         result = 31 * result + (latLong?.contentHashCode() ?: 0)
         result = 31 * result + gpsReadAttempted.hashCode()

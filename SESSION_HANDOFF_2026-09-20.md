@@ -1,5 +1,17 @@
 # 观止新对话接续 · 2026-09-20
 
+## 近期维护同步 · 2026-10-05（版本不变）
+
+Android 保持 **0.5.8/58**，iOS 保持 **0.5.9/59**。本次同步近期修复及说明，不升版本。
+
+- Android 中文地名：请求并保留简体中文地名；照片位置权限后来获准时，旧空 GPS 缓存可重新读取。文件本身缺少 GPS 时仍无法补出坐标，中文地名服务覆盖率继续观察。
+- Android 大图版式：已撤回去除 `No.xx` 的试验，保留用户接受的原编号、字号与时间地点位置。
+- Android 拍摄时间：所有来源统一优先文件原始 EXIF 时间，大图显示、列表倒序、首页封面及时间跨度一致；旧缓存核验后展示。Phocus 500 张、DJI Album 255 张在 PMA110 上逐张通过，修复后时间不匹配与列表逆序均为 0；23 项单测、Release、Lint、签名通过。
+- 当前 APK `APK/Punctum-0.5.8-original-capture-time.apk` 已保留数据覆盖安装 PMA110，手机与本地 SHA256 同为 `4682d62e3c5da7978cc2c4f0af7b061a68b382367cb377e6c6cd35c8325dc715`，已上传 Google Drive。
+- iOS 延续 9 月 25 日状态：43 项 XCTest/Release 通过；首页冷启动滑动已获用户确认，最新封面、进入与返回定位仍待 iPhone 真机复测。本轮未改 iOS 代码。
+
+详见 [新对话交接](SESSION_HANDOFF_2026-10-05.md)、[开发交接](PUNCTUM_HANDOFF.md)及 [Android 真机摘要](docs/ANDROID_CAPTURE_TIME_VALIDATION_2026-10-05.md)。源码、测试和文档同步 GitHub；安装包、签名资料、原始照片元数据与设备抓取留在本地/Drive。
+
 ## 2026-09-25 接续更新
 
 今天的完整增量及最新验收状态见 [PUNCTUM_HANDOFF.md](PUNCTUM_HANDOFF.md)、[Android 更新说明](changelog/android.md)、[iOS 更新说明](changelog/ios.md)。iOS 0.5.9/59 包含冷启动首页后台刷新、封面恢复、进入图集后台加载及大图返回列表定位；43 项 XCTest 与 Release 构建通过，冷启动滑动已获用户确认，其他最新交互待 iPhone 真机复测。Android 0.5.8/58 包含系统相册调整拍摄时间后的排序稳定性修复；19 项单测、Release、Lint 与签名验证通过，用户远程安装后反馈目前状态不错。最新本地包分别是 `iOS/IPA/Punctum-0.5.9-return-center-unsigned.ipa` 和 `APK/Punctum-0.5.8-sort-stability.apk`；安装包不进入 GitHub。
