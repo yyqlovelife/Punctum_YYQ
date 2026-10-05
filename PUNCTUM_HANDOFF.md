@@ -24,7 +24,7 @@ Android 从 0.5.8/58 升级为 **0.5.9/59**。本版主要更新进出页面动�
 
 ### 构建与验证
 
-Android 使用 Android Studio JBR，发布检查 `testReleaseUnitTest assembleRelease lintRelease`。iOS 使用现有工程和 `scripts/build-unsigned-ipa.sh`，最新未签名 IPA 保留原 AltStore 安装方式。验证详情见 [动效](docs/ANDROID_SHARED_MOTION_VALIDATION_2026-10-05.md)、[Android 排序](docs/ANDROID_PHOTO_SORT_VALIDATION_2026-10-05.md)、[iOS 排序](docs/IOS_PHOTO_SORT_VALIDATION_2026-10-05.md)。本轮发布前远端 `main` 基线为 `b1eb4b79228f77dd1b2e417e11f4c497245b5257`；上传后必须核对远端提交与完整文件树。
+Android 使用 Android Studio JBR，发布检查 `testReleaseUnitTest assembleRelease lintRelease`。iOS 使用现有工程和 `scripts/build-unsigned-ipa.sh`，最新未签名 IPA 保留原 AltStore 安装方式。验证详情见 [动效](docs/ANDROID_SHARED_MOTION_VALIDATION_2026-10-05.md)、[Android 排序](docs/ANDROID_PHOTO_SORT_VALIDATION_2026-10-05.md)、[iOS 排序](docs/IOS_PHOTO_SORT_VALIDATION_2026-10-05.md)。本轮发布前远端 `main` 基线为 `b1eb4b79228f77dd1b2e417e11f4c497245b5257`；源码上传核验已完成，远端 `main` 与本地同为 `f98f6e7ca1d3bfadfa86e848a47e40c9c1ad3080`，完整 171 个文件路径、权限和哈希一致；本次核验记录会作为后续文档提交上传。
 
 ## 历史阶段记录
 

@@ -17,7 +17,7 @@ Android 从 0.5.8/58 升级为 **0.5.9/59**。本版主要更新进出页面动�
 
 本轮一起同步此前完成的 iOS 排序与开屏文案源码及文档，iOS 保持 **0.5.9/59**，进出动效仍仅 Android 实现。既有 iOS 47 项 XCTest、Release 通过；最新本地 IPA `iOS/IPA/Punctum-0.5.9-onboarding-copy-unsigned.ipa` 的 ZIP 完整性本轮复核通过，iPhone 本轮视觉与真实图库交互仍待真机验证。公开检查见 [发布验证](docs/RELEASE_VALIDATION_2026-10-05.md)。
 
-源码、资源、测试、版本配置和本轮文档一并同步 GitHub `main`；安装包、签名凭据与原始设备素材留本机。完整日志见 [Android](changelog/android.md)、[iOS](changelog/ios.md)，接续见 [会话交接](SESSION_HANDOFF_2026-10-05.md)。
+源码发布提交 `f98f6e7ca1d3bfadfa86e848a47e40c9c1ad3080` 已验证远端 `main`、树与全部 171 个文件一致；本轮核验记录随后补充文档提交。源码、资源、测试、版本配置和本轮文档一并同步 GitHub `main`；安装包、签名凭据与原始设备素材留本机。完整日志见 [Android](changelog/android.md)、[iOS](changelog/ios.md)，接续见 [会话交接](SESSION_HANDOFF_2026-10-05.md)。
 
 ## 历史阶段记录
 
