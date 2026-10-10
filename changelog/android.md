@@ -112,7 +112,7 @@ Release 构建通过，`APK/Punctum-0.5.8-unified-photo-entry-350ms.apk` 已保�
 
 修改时间采用现有 Photo.modifiedMillis（Android MediaStore DATE_MODIFIED，秒转毫秒；文件来源使用 lastModified）。修改时间相同时依次比较拍摄时间、照片 URI；缺失修改时间回退拍摄时间。部分编辑器的非破坏性编辑不会更新原文件修改时间，这类操作无法保证置顶。大图日期始终显示真实拍摄时间，翻页跟随当前列表；取消删除与移动后的重排沿用对应图集模式。首页封面与时间跨度继续按拍摄时间计算。
 
-PMA110 真机：Phocus 502 张、DJI Album 255 张，两种模式全量排序均通过；修改时间与媒体库记录一致，缓存拍摄时间与已有 EXIF 一致。已验证独立记忆、重启保持、长按不切换、修改模式的大图翻页/返回和取消待删除恢复。真实照片未执行删除或移动；未穷举第三方编辑器的修改时间写入行为。28 项单测、Release、Lint 与签名通过。摘要见 [排序验证](docs/ANDROID_PHOTO_SORT_VALIDATION_2026-10-05.md)。
+PMA110 真机：Phocus 502 张、DJI Album 255 张，两种模式全量排序均通过；修改时间与媒体库记录一致，缓存拍摄时间与已有 EXIF 一致。已验证独立记忆、重启保持、长按不切换、修改模式的大图翻页/返回和取消待删除恢复。真实照片未执行删除或移动；未穷举第三方编辑器的修改时间写入行为。28 项单测、Release、Lint 与签名通过。摘要见 [排序验证](../docs/ANDROID_PHOTO_SORT_VALIDATION_2026-10-05.md)。
 
 最新包 `APK/Punctum-0.5.8-photo-sort.apk` 已保留数据覆盖安装，手机 APK 与本地 SHA256 均为 `d90db77319c4bc6c675fabd0607d5d064139058ee9963489a57249e9f1dc47b7`；已上传 [Google Drive](https://drive.google.com/file/d/1avFG-Geu-g1GO4ixbn0cj-etlKj4ubLa/view?usp=drivesdk) 并核对大小 38,950,996 字节。Android 仍为 0.5.8/58，iOS 本轮未改。以下原始时间修复记录为前一阶段，本轮源码和文档尚未推送 GitHub。
 

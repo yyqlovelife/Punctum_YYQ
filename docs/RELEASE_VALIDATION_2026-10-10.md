@@ -44,4 +44,6 @@ iOS 包未签名，沿用 AltStore。以上两个包本次重新核对本地哈�
 
 目标仓库：[yyqlovelife/Punctum_YYQ](https://github.com/yyqlovelife/Punctum_YYQ)，目标分支 `main`。发布前本地 HEAD 与远端 main 同为 `aaaa86be14187401312e98e33e80634cc24a2da8`。发布完整近期源码、资源、测试、版本/构建配置与公开说明；保留全部原有本地改动，没有使用 L3 Workflow 或上传 Google Drive。
 
-远端发布核验记录将在上传后补充。
+首个源码发布提交为 [`f3e2d75`](https://github.com/yyqlovelife/Punctum_YYQ/commit/f3e2d750b221550273a4b26d8c1b5dced0d33b41)，远端树 `03d6992c991b686213cfec7a77f77451302079a0`。普通 Git 推送因传输错误失败后，通过 GitHub Git Data API 完成无强制更新；重新查询 `main` 与完整递归树，全部 **185 个文件**的路径、类型、模式和 blob 与本地发布树逐项一致，48 个近期改动文件完整纳入。
+
+随后补充这份已完成的核验记录，并修正 Android 日志中的一处旧相对链接。本地接续同内容的远端源码提交以保持历史可接续，保留全部原本改动；源码、版本配置与同日已通过的测试/安装包均未改变。最终文档补充提交再次核对 GitHub main 与完整文件树；结果在本次会话报告。
