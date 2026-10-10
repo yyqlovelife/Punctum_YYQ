@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import UIKit
 @testable import Punctum
 
 final class DeletionMotionTests: XCTestCase {
@@ -31,5 +33,49 @@ final class DeletionMotionTests: XCTestCase {
             XCTAssertEqual(previous.scale, 0.035, accuracy: 0.0001)
             XCTAssertEqual(previous.alpha, 0, accuracy: 0.0001)
         }
+    }
+}
+
+
+extension DeletionMotionTests {
+    @MainActor func testBackgroundDuringConfirmedAnimationCommitsOnceAndUnlocksScrolling() async throws {
+        try await checkInterruptedDeletion(released: true, commit: true)
+    }
+    @MainActor func testBackgroundDuringCancelledAnimationDoesNotDeleteAndUnlocksScrolling() async throws {
+        try await checkInterruptedDeletion(released: true, commit: false)
+    }
+    @MainActor func testBackgroundWhileFingerDownCancelsAndUnlocksScrolling() async throws {
+        try await checkInterruptedDeletion(released: false, commit: false)
+    }
+    @MainActor private func checkInterruptedDeletion(released: Bool, commit: Bool) async throws {
+        let controller = NativeDeletionPager<EmptyView>.Controller(content: AnyView(Color.orange))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { controller.tearDown(); window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(100))
+        controller.view.layoutIfNeeded()
+        let scroll = UIScrollView(frame: controller.view.bounds)
+        controller.host.view.addSubview(scroll)
+        var completions: [Bool] = [], settled = 0
+        controller.onBegin = { true }
+        controller.onComplete = { completions.append($0) }
+        controller.onSettled = { settled += 1 }
+        XCTAssertTrue(controller.beginSnapshot(UIView(frame: controller.view.bounds)))
+        XCTAssertFalse(scroll.panGestureRecognizer.isEnabled)
+        XCTAssertEqual(controller.host.view.layer.opacity, 0)
+        if released { controller.settle(commit: commit) }
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+        // The SwiftUI content update is deliberately omitted: recovery must not
+        // rely on an animation completion or an update delivered while suspended.
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(completions, [released && commit])
+        XCTAssertEqual(settled, 1)
+        XCTAssertTrue(scroll.panGestureRecognizer.isEnabled)
+        XCTAssertEqual(controller.host.view.layer.opacity, 1)
+        controller.suspend()
+        XCTAssertEqual(completions.count, 1)
+        XCTAssertTrue(controller.beginSnapshot(UIView(frame: controller.view.bounds)), "The next gesture must be usable")
+        controller.suspend()
     }
 }

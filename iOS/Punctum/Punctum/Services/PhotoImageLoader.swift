@@ -60,6 +60,9 @@ final class PhotoImageLoader: ObservableObject {
         }
         cancelRequest()
         loadingID = id
+        // A reused view must never display the previous asset while a new request runs.
+        image = PhotoThumbnailCache.shared.image(for: id, size: targetSize)
+            ?? PhotoThumbnailCache.shared.previewImage(for: id)
         let expectedGeneration = generation
         if let cached = PhotoThumbnailCache.shared.image(for: id, size: targetSize) {
             image = cached
@@ -99,6 +102,10 @@ final class PhotoImageLoader: ObservableObject {
                 }
             }
         }
+    }
+
+    func image(for photoID: String) -> UIImage? {
+        loadingID == photoID ? image : nil
     }
 
     func cancel() {
@@ -218,7 +225,7 @@ struct PhotoAssetImage: View {
     @StateObject private var loader = PhotoImageLoader()
 
     var body: some View {
-        let displayed = loader.image
+        let displayed = loader.image(for: photo.id)
             ?? PhotoThumbnailCache.shared.image(for: photo.id, size: targetSize)
             ?? PhotoThumbnailCache.shared.previewImage(for: photo.id)
         ZStack {
@@ -233,11 +240,7 @@ struct PhotoAssetImage: View {
         }
         .clipped()
         .onAppear(perform: startLoad)
-        .onChange(of: photo.id) { _, newID in
-            loader.image = PhotoThumbnailCache.shared.image(for: newID, size: targetSize)
-                ?? PhotoThumbnailCache.shared.previewImage(for: newID)
-            startLoad()
-        }
+        .onChange(of: photo.id) { _, _ in startLoad() }
         .onDisappear { loader.cancel() }
         .transaction { $0.animation = nil }
     }

@@ -60,6 +60,7 @@
 		CD9D6BBF420DAD244591DC6C /* ComparisonPhotoPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBB47292DD2FE2CF7FBFCEBC /* ComparisonPhotoPicker.swift */; };
 		D225CAFCC6C1210FC3139649 /* ComparisonStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 571DD2B30CB15581710AC628 /* ComparisonStateTests.swift */; };
 		D331C08BD4AE1D711BA8217C /* Georgia.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 712729DA24D9FD07BB60D94B /* Georgia.ttf */; };
+		D7F00F13C0C2DECC3B028AF7 /* GalleryPhotoIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1283E6BE79EE5D1754A6F296 /* GalleryPhotoIdentityTests.swift */; };
 		DC6A2EC77D57CF07EFC95256 /* ComparisonState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81A3886587FF68B0F08DE50A /* ComparisonState.swift */; };
 		E55418160520177AA98A13EA /* postcard_footer_paper_texture.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 4EB640D6E5A760FF5FEDBD2A /* postcard_footer_paper_texture.jpg */; };
 		ECCEE07591E5303FDCF25BCB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DE9215A5E8FC992BB5188AF5 /* Assets.xcassets */; };
@@ -85,6 +86,7 @@
 		065003D5792637E34D3EB1B0 /* PunctumTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PunctumTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A3D4ED691A4C8F0D1C4BF29 /* LibreBaskerville-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "LibreBaskerville-Regular.ttf"; sourceTree = "<group>"; };
 		0A7B39C7945CB80587052D17 /* CaptureDateIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureDateIndexTests.swift; sourceTree = "<group>"; };
+		1283E6BE79EE5D1754A6F296 /* GalleryPhotoIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryPhotoIdentityTests.swift; sourceTree = "<group>"; };
 		12F965273CDB9E18CE4D3E94 /* ComparisonImagePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComparisonImagePane.swift; sourceTree = "<group>"; };
 		15181AED497BDDE3C4175CB6 /* CormorantGaramond-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "CormorantGaramond-Medium.ttf"; sourceTree = "<group>"; };
 		16CB1FA90188F6247FFA898A /* reversal_film_paper_texture.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = reversal_film_paper_texture.jpg; sourceTree = "<group>"; };
@@ -280,6 +282,7 @@
 				1BECAE32947D92ECF9204F8F /* DetailPhotoLayoutTests.swift */,
 				3F6373FD6AC70E3657F470CA /* FormattingTests.swift */,
 				32F7CF84575E55443EAB054E /* FullFrameImageDecoderTests.swift */,
+				1283E6BE79EE5D1754A6F296 /* GalleryPhotoIdentityTests.swift */,
 				5BF6363925082E4A5E6B69F1 /* PhotoSortOrderTests.swift */,
 				32D2957768474CF9DBB19FFE /* PhotoZoomTests.swift */,
 				A57D0460F85523D58E413635 /* PressTravelGateTests.swift */,
@@ -459,6 +462,7 @@
 				9C5655AEF22F4B3B6A3AFAE9 /* DetailPhotoLayoutTests.swift in Sources */,
 				87F0554DEDF9C6C1B38280D2 /* FormattingTests.swift in Sources */,
 				BD57D7C4FB99CF06FE6DEF72 /* FullFrameImageDecoderTests.swift in Sources */,
+				D7F00F13C0C2DECC3B028AF7 /* GalleryPhotoIdentityTests.swift in Sources */,
 				6153D74A471BD20F1D071245 /* PhotoSortOrderTests.swift in Sources */,
 				4B44B11F2967A498E66E8C39 /* PhotoZoomTests.swift in Sources */,
 				21684E482431E1A3513153F6 /* PressTravelGateTests.swift in Sources */,
@@ -565,7 +569,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 59;
+				CURRENT_PROJECT_VERSION = 60;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -584,7 +588,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.5.9;
+				MARKETING_VERSION = 0.5.10;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -693,7 +697,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 59;
+				CURRENT_PROJECT_VERSION = 60;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -706,7 +710,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.5.9;
+				MARKETING_VERSION = 0.5.10;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

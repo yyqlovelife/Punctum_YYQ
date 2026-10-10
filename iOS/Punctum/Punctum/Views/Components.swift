@@ -432,18 +432,22 @@ struct MoveToAlbumIcon: View {
 struct ToastView: View {
     let message: String
     var fontSize: CGFloat = 12
+    var multiline = false
 
     var body: some View {
         Text(message)
             .font(PunctumTheme.serifSC(fontSize))
             .foregroundStyle(PunctumTheme.bone.opacity(0.92))
-            .multilineTextAlignment(.center)
+            .multilineTextAlignment(multiline ? .leading : .center)
+            .fixedSize(horizontal: false, vertical: true)
+            .lineSpacing(multiline ? 5 : 0)
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(
-                Color(red: 25 / 255, green: 25 / 255, blue: 25 / 255).opacity(0.86),
-                in: Capsule()
-            )
+            .padding(.vertical, multiline ? 16 : 10)
+            .background {
+                let color = Color(red: 25 / 255, green: 25 / 255, blue: 25 / 255).opacity(0.86)
+                if multiline { RoundedRectangle(cornerRadius: 14).fill(color) }
+                else { Capsule().fill(color) }
+            }
     }
 }
 

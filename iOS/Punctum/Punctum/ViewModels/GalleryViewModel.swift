@@ -8,7 +8,13 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published private(set) var overviews: [String: GalleryOverview] = [:]
     @Published private(set) var photos: [PhotoItem] = []
     @Published private(set) var isSortingPhotos = false
-    static let photoSortHint = "可切换按「拍摄时间」或「编辑时间」排序"
+    static let photoSortHint = """
+    可在以下三种模式之间切换图片顺序
+
+    拍摄：按真实拍摄时间排序
+    编辑：按编辑过的保存时间排序
+    同步：按系统相册自定义的位置排序
+    """
     @Published private(set) var isLoading = false
     @Published var currentGalleryID: String?
     @Published var showSwitcher = false
@@ -17,7 +23,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     @Published var detailVisible = false
     @Published private(set) var galleryReturnTargetID: String?
     @Published var galleryReadyID: String?
-    private var detailSession = UUID()
+    @Published private(set) var detailSession = UUID()
     private var detailEntryVisibleIDs: Set<String> = []
     private var pendingDetailClosePhotos: [PhotoItem] = []
     @Published private(set) var detailInitialMetadata: PhotoMetadata?
@@ -43,12 +49,16 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     private var allRefreshTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var gallerySelectionTask: Task<Void, Never>?
+    private var visibleGalleryRefreshTask: Task<Void, Never>?
+    private var visibleGalleryRefreshRequested = false
+    private var visibleGalleryRefreshGeneration = 0
     private var lastKnownAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     private var galleryLoadGeneration = 0
     private var galleryFetchNextIndex = 0
     @Published private(set) var galleryFetchExhausted = true
     private var isLoadingMorePhotos = false
-    private var deletionInFlight = false
+    @Published private(set) var isDeletingPhotos = false
+    private var isApplicationActive = true
 
     private static let deleteTombstoneDuration: TimeInterval = 120
     private static let galleryPageCount = 80
@@ -65,7 +75,8 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     init(
         store: GalleryStore,
         library: PhotoLibraryService,
-        imageCache: GalleryImageCache
+        imageCache: GalleryImageCache,
+        startLibraryUpdates: Bool = true
     ) {
         self.store = store
         self.library = library
@@ -80,8 +91,9 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             invitationStyle = override
             store.saveInvitationStyle(override)
         }
-        PHPhotoLibrary.shared().register(self)
         hydrateOverviewSnapshots()
+        guard startLibraryUpdates else { return }
+        PHPhotoLibrary.shared().register(self)
         Task { [weak self] in
             guard let self else { return }
             // Give the cached home screen a frame before starting Photos work.
@@ -116,7 +128,9 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 guard let photo = await MainActor.run(body: { self?.photos.first }) else { return }
                 let metadata = await MetadataService.shared.metadata(for: photo)
                 await MainActor.run {
-                    self?.openDetail(at: 0, metadata: metadata)
+                    if let galleryID = self?.currentGalleryID {
+                        self?.openDetail(photoID: photo.id, in: galleryID, metadata: metadata)
+                    }
                 }
             }
         }
@@ -186,7 +200,20 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         transientMessage = "添加完成"
     }
 
+    func dismissPhotoSortHint() {
+        if transientMessage == Self.photoSortHint { transientMessage = nil }
+    }
+
+    private func cancelVisibleGalleryRefresh() {
+        visibleGalleryRefreshGeneration += 1
+        visibleGalleryRefreshTask?.cancel()
+        visibleGalleryRefreshTask = nil
+        visibleGalleryRefreshRequested = false
+    }
+
     func selectGallery(_ id: String) {
+        dismissPhotoSortHint()
+        cancelVisibleGalleryRefresh()
         guard let gallery = galleries.first(where: { $0.id == id }) else { return }
         isSortingPhotos = false
         gallerySelectionTask?.cancel()
@@ -208,10 +235,13 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             guard !Task.isCancelled, self.currentGalleryID == id, !self.showSwitcher else { return }
             self.gallerySelectionTask = nil
             self.loadCurrentGallery()
+            self.refreshVisibleGalleryIfNeeded()
         }
     }
 
     func openSwitcher() {
+        dismissPhotoSortHint()
+        cancelVisibleGalleryRefresh()
         isSortingPhotos = false
         gallerySelectionTask?.cancel()
         gallerySelectionTask = nil
@@ -227,9 +257,10 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
 
     func togglePhotoSort() {
         guard var gallery = currentGallery, !isLoading, !isSortingPhotos,
-              detailIndex == nil, !deletionInFlight, pendingDeletionRequest == nil else { return }
+              detailIndex == nil, !isDeletingPhotos, pendingDeletionRequest == nil else { return }
         if store.consumePhotoSortHint() { transientMessage = Self.photoSortHint }
         gallery.sortOrder = gallery.sortOrder.next
+        cancelVisibleGalleryRefresh()
         gallerySelectionTask?.cancel()
         isSortingPhotos = true
         gallerySelectionTask = Task { [weak self] in
@@ -243,6 +274,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
             gallerySelectionTask = nil
             loadCurrentGallery()
             isSortingPhotos = false
+            refreshVisibleGalleryIfNeeded()
         }
     }
 
@@ -289,7 +321,25 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func openDetail(at index: Int, metadata: PhotoMetadata, entryVisibleIDs: Set<String> = []) {
-        guard !isSortingPhotos, photos.indices.contains(index) else { return }
+        guard photos.indices.contains(index), let currentGalleryID else { return }
+        openDetail(photoID: photos[index].id, in: currentGalleryID, metadata: metadata, entryVisibleIDs: entryVisibleIDs)
+    }
+
+    func openDetail(photoID: String, in galleryID: String, metadata: PhotoMetadata, entryVisibleIDs: Set<String> = []) {
+        guard !isSortingPhotos, !showSwitcher, detailIndex == nil,
+              !isDeletingPhotos, pendingDeletionRequest == nil,
+              let index = GalleryPhotoSelection.index(
+                for: photoID, in: photos, expectedGalleryID: galleryID, currentGalleryID: currentGalleryID
+              ) else { return }
+        dismissPhotoSortHint()
+        // Freeze the visit snapshot before opening detail. A foreground fetch that
+        // finishes later must not replace the pager's order halfway through a visit.
+        if visibleGalleryRefreshTask != nil {
+            visibleGalleryRefreshGeneration += 1
+            visibleGalleryRefreshTask?.cancel()
+            visibleGalleryRefreshTask = nil
+            visibleGalleryRefreshRequested = true
+        }
         if let gallery = currentGallery { library.pinCaptureOrder(for: gallery) }
         detailEntryVisibleIDs = entryVisibleIDs.isEmpty ? [photos[index].id] : entryVisibleIDs
         galleryReturnTargetID = nil
@@ -350,7 +400,10 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         detailIndex = nil
         detailInitialMetadata = nil
         detailEntryVisibleIDs = []
-        guard !pendingPhotos.isEmpty else { return }
+        guard !pendingPhotos.isEmpty else {
+            refreshVisibleGalleryIfNeeded()
+            return
+        }
 
         var seen = Set<String>()
         let uniquePhotos = pendingPhotos.filter { seen.insert($0.id).inserted }
@@ -358,12 +411,14 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func cancelPendingDeletion(_ request: PendingPhotoDeletion) {
+        guard pendingDeletionRequest?.id == request.id else { return }
         pendingDeletionRequest = nil
+        refreshVisibleGalleryIfNeeded()
     }
 
     func confirmPendingDeletion(_ request: PendingPhotoDeletion) {
-        guard !deletionInFlight else { return }
-        deletionInFlight = true
+        guard pendingDeletionRequest?.id == request.id, !isDeletingPhotos else { return }
+        isDeletingPhotos = true
         refreshTask?.cancel()
         refreshGeneration += 1
         overviewTasks.values.forEach { $0.cancel() }
@@ -373,7 +428,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         Task {
             do {
                 defer {
-                    deletionInFlight = false
+                    isDeletingPhotos = false
                     scheduleRefresh()
                 }
                 try await library.delete(request.photos)
@@ -407,29 +462,10 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func deletePhoto(_ photo: PhotoItem) {
-        Task {
-            do {
-                try await library.delete(photo)
-                markDeleting([photo])
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    photos.removeAll { $0.id == photo.id }
-                    if photos.isEmpty {
-                        detailIndex = nil
-                    } else if let detailIndex {
-                        self.detailIndex = min(detailIndex, photos.count - 1)
-                    }
-                }
-                updateCurrentOverview()
-            } catch {
-                let photosError = error as NSError
-                if photosError.domain != PHPhotosErrorDomain ||
-                    photosError.code != PHPhotosError.userCancelled.rawValue {
-                    transientMessage = error.localizedDescription
-                }
-            }
-        }
+        guard !isDeletingPhotos, pendingDeletionRequest == nil else { return }
+        let request = PendingPhotoDeletion(photos: [photo])
+        pendingDeletionRequest = request
+        confirmPendingDeletion(request)
     }
 
     func movePhoto(_ photo: PhotoItem, to destination: AlbumOption) async throws {
@@ -473,13 +509,15 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     }
 
     func refreshAll() {
-        guard !deletionInFlight else { return }
+        guard isApplicationActive, !isDeletingPhotos else { return }
         guard library.authorizationStatus == .authorized || library.authorizationStatus == .limited else { return }
         refreshGeneration += 1
         let generation = refreshGeneration
         allRefreshTask?.cancel()
         pruneExpiredTombstones()
-        if currentGallery != nil, !showSwitcher, gallerySelectionTask == nil { loadCurrentGallery() }
+        if currentGallery != nil, !showSwitcher, gallerySelectionTask == nil {
+            requestVisibleGalleryRefresh()
+        }
         let candidates = galleries
         allRefreshTask = Task { [weak self] in
             guard let self else { return }
@@ -498,28 +536,35 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
                 persistGalleries()
             }
             for gallery in galleries {
-                guard !Task.isCancelled, generation == refreshGeneration, !deletionInFlight else { return }
+                guard !Task.isCancelled, generation == refreshGeneration, !isDeletingPhotos else { return }
                 if overviews[gallery.id]?.postcardCoverPath == nil
                     || overviews[gallery.id]?.ticketCoverPath == nil {
                     refreshOverview(for: gallery)
                 }
                 await library.prepareCaptureOrder(for: gallery)
-                guard !Task.isCancelled, generation == refreshGeneration, !deletionInFlight else { return }
+                guard !Task.isCancelled, generation == refreshGeneration, !isDeletingPhotos else { return }
                 refreshOverview(for: gallery)
                 if currentGalleryID == gallery.id, !showSwitcher, gallerySelectionTask == nil, detailIndex == nil,
-                   let activeGallery = currentGallery {
-                    await library.pinCaptureOrderAsync(for: activeGallery)
-                    guard !Task.isCancelled, currentGalleryID == gallery.id, gallerySelectionTask == nil else { return }
-                    loadCurrentGallery()
+                   currentGallery?.sortOrder != .sync {
+                    requestVisibleGalleryRefresh()
                 }
                 await Task.yield()
             }
         }
     }
 
+    func appDidEnterBackground() {
+        isApplicationActive = false
+        refreshTask?.cancel()
+        allRefreshTask?.cancel()
+    }
+
     func appDidBecomeActive() {
-        // Photos changes have their own observer. App-switcher inactive/active transitions
-        // must not rescan every gallery or rebuild covers on the main actor.
+        isApplicationActive = true
+        // Missed Photos notifications affect every order, including deletion.
+        // Keep the visible snapshot until the fresh asynchronous fetch is ready.
+        library.invalidateCaptureOrder()
+        requestVisibleGalleryRefresh()
         let status = library.authorizationStatus
         guard status != lastKnownAuthorization else { return }
         lastKnownAuthorization = status
@@ -529,7 +574,35 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
         Task { @MainActor [weak self] in
             self?.library.invalidateCaptureOrder()
+            self?.requestVisibleGalleryRefresh()
             self?.scheduleRefresh()
+        }
+    }
+
+    private func requestVisibleGalleryRefresh() {
+        guard currentGallery != nil, !showSwitcher else { return }
+        visibleGalleryRefreshRequested = true
+        refreshVisibleGalleryIfNeeded()
+    }
+
+    private func refreshVisibleGalleryIfNeeded() {
+        guard isApplicationActive, visibleGalleryRefreshRequested, let gallery = currentGallery,
+              !showSwitcher, detailIndex == nil, pendingDeletionRequest == nil, !isDeletingPhotos,
+              !isSortingPhotos, gallerySelectionTask == nil,
+              library.authorizationStatus == .authorized || library.authorizationStatus == .limited else { return }
+        visibleGalleryRefreshGeneration += 1
+        let generation = visibleGalleryRefreshGeneration
+        visibleGalleryRefreshTask?.cancel()
+        visibleGalleryRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            await library.pinCaptureOrderAsync(for: gallery)
+            guard !Task.isCancelled, generation == visibleGalleryRefreshGeneration else { return }
+            visibleGalleryRefreshTask = nil
+            guard currentGalleryID == gallery.id, currentGallery?.sortOrder == gallery.sortOrder,
+                  isApplicationActive, !showSwitcher, detailIndex == nil, pendingDeletionRequest == nil,
+                  !isDeletingPhotos, !isSortingPhotos, gallerySelectionTask == nil else { return }
+            visibleGalleryRefreshRequested = false
+            loadCurrentGallery()
         }
     }
 
@@ -538,13 +611,13 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
         refreshTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, let self else { return }
-            guard !self.deletionInFlight else { return }
+            guard self.isApplicationActive, !self.isDeletingPhotos else { return }
             self.refreshAll()
         }
     }
 
     private func loadCurrentGallery() {
-        guard detailIndex == nil, pendingDeletionRequest == nil, !deletionInFlight else { return }
+        guard detailIndex == nil, pendingDeletionRequest == nil, !isDeletingPhotos else { return }
         guard let gallery = currentGallery else {
             photos = []
             isLoading = false
@@ -586,7 +659,7 @@ final class GalleryViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeOb
               !isLoading,
               !isSortingPhotos,
               !isLoadingMorePhotos,
-              !deletionInFlight,
+              !isDeletingPhotos,
               pendingDeletionRequest == nil,
               !galleryFetchExhausted else { return }
         isLoadingMorePhotos = true

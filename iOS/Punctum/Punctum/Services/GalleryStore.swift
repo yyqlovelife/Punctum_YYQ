@@ -12,7 +12,7 @@ final class GalleryStore {
     }
 
     func consumePhotoSortHint() -> Bool {
-        let key = "punctum.photoSortHintSeen"
+        let key = "punctum.photoSortHintSeen.threeModes"
         guard !defaults.bool(forKey: key) else { return false }
         defaults.set(true, forKey: key)
         return true

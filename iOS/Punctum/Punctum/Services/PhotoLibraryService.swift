@@ -54,7 +54,7 @@ final class PhotoLibraryService {
 
     private func orderedAssets(for gallery: PunctumGallery) -> [PHAsset] {
         if let pinned = pinnedOrder[gallery.id] { return pinned }
-        if let ordered = captureOrder[gallery.id] { return ordered }
+        if gallery.sortOrder != .sync, let ordered = captureOrder[gallery.id] { return ordered }
         let result = photoResult(for: gallery)
         var assets: [PHAsset] = []
         result.enumerateObjects { asset, _, _ in assets.append(asset) }
@@ -66,13 +66,13 @@ final class PhotoLibraryService {
         pinGeneration += 1
         let generation = pinGeneration
         let assets: [PHAsset]
-        if let ordered = captureOrder[gallery.id], completedOrderGeneration[gallery.id] == orderGeneration {
+        if gallery.sortOrder != .sync, let ordered = captureOrder[gallery.id], completedOrderGeneration[gallery.id] == orderGeneration {
             assets = ordered
         } else {
             assets = await Self.fetchAssetsInBackground(for: gallery, priority: .userInitiated)
         }
         guard !Task.isCancelled, generation == pinGeneration else { return }
-        if gallery.sortOrder == .capture {
+        if gallery.sortOrder == .capture || gallery.sortOrder == .sync {
             pinnedOrder[gallery.id] = assets
             return
         }
@@ -247,7 +247,9 @@ final class PhotoLibraryService {
     private func captureAssets(for gallery: PunctumGallery) -> [PHAsset] {
         if let ordered = captureOrder[gallery.id] { return ordered }
         var assets: [PHAsset] = []
-        photoResult(for: gallery).enumerateObjects { asset, _, _ in assets.append(asset) }
+        var captureGallery = gallery
+        captureGallery.sortOrder = .capture
+        photoResult(for: captureGallery).enumerateObjects { asset, _, _ in assets.append(asset) }
         return assets
     }
 
@@ -290,7 +292,9 @@ final class PhotoLibraryService {
         if let ordered = captureOrder[gallery.id] {
             assets = ordered
         } else {
-            assets = await Self.fetchAssetsInBackground(for: gallery)
+            var captureGallery = gallery
+            captureGallery.sortOrder = .capture
+            assets = await Self.fetchAssetsInBackground(for: captureGallery)
         }
         var count = 0
         var oldest: Date?
@@ -320,10 +324,25 @@ final class PhotoLibraryService {
 
     func delete(_ photos: [PhotoItem]) async throws {
         guard !photos.isEmpty else { return }
-        let assets = photos.map(\.asset)
+        // Resolve current objects by identity after a suspended library session.
+        let ids = Array(Set(photos.map(\.id)))
+        let assets = await photoItemsAsync(localIdentifiers: ids).map(\.asset)
+        guard !assets.isEmpty else { return }
+        // Fetching may have yielded while the user switched apps. Do not begin
+        // a system confirmation in a background scene; retain the commit task.
+        if UIApplication.shared.applicationState != .active {
+            for await _ in NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification) {
+                if UIApplication.shared.applicationState == .active { break }
+            }
+        }
         try await performChanges(fallback: .deleteFailed) {
             PHAssetChangeRequest.deleteAssets(assets as NSArray)
         }
+        // Only report a successful deletion after Photos has removed the assets.
+        guard await photoItemsAsync(localIdentifiers: ids).isEmpty else {
+            throw PhotoLibraryError.deleteFailed
+        }
+        invalidateCaptureOrder()
     }
 
     func move(_ photo: PhotoItem, from source: PunctumGallery, to destination: PHAssetCollection) async throws {
@@ -502,7 +521,9 @@ final class PhotoLibraryService {
 
     private func photoResult(for gallery: PunctumGallery, limit: Int? = nil) -> PHFetchResult<PHAsset> {
         if let collection = resolvedCollection(for: gallery) {
-            let result = fetchResult(in: collection, limit: limit)
+            let result = PHAsset.fetchAssets(in: collection, options: imageFetchOptions(
+                limit: limit, preserveCollectionOrder: gallery.sortOrder == .sync
+            ))
             if result.count > 0 { return result }
             if isLibraryGallery(gallery, collection) {
                 return fetchAllImages(limit: limit)
@@ -520,10 +541,13 @@ final class PhotoLibraryService {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
         options.includeHiddenAssets = false
-        options.sortDescriptors = [
-            NSSortDescriptor(key: "creationDate", ascending: false),
-            NSSortDescriptor(key: "modificationDate", ascending: false),
-        ]
+        // With no sort descriptors, regular albums retain their stored custom order.
+        if gallery.sortOrder != .sync {
+            options.sortDescriptors = [
+                NSSortDescriptor(key: "creationDate", ascending: false),
+                NSSortDescriptor(key: "modificationDate", ascending: false),
+            ]
+        }
         let stored = PHAssetCollection.fetchAssetCollections(
             withLocalIdentifiers: [gallery.id], options: nil
         ).firstObject
@@ -559,14 +583,16 @@ final class PhotoLibraryService {
         PHAsset.fetchAssets(in: collection, options: imageFetchOptions(limit: limit))
     }
 
-    private func imageFetchOptions(limit: Int?) -> PHFetchOptions {
+    private func imageFetchOptions(limit: Int?, preserveCollectionOrder: Bool = false) -> PHFetchOptions {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
         options.includeHiddenAssets = false
-        options.sortDescriptors = [
-            NSSortDescriptor(key: "creationDate", ascending: false),
-            NSSortDescriptor(key: "modificationDate", ascending: false),
-        ]
+        if !preserveCollectionOrder {
+            options.sortDescriptors = [
+                NSSortDescriptor(key: "creationDate", ascending: false),
+                NSSortDescriptor(key: "modificationDate", ascending: false),
+            ]
+        }
         if let limit { options.fetchLimit = max(limit, 0) }
         return options
     }

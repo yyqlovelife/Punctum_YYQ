@@ -54,6 +54,7 @@ struct NativeDeletionPager<Content: View>: UIViewControllerRepresentable {
         private var progress: CGFloat = 0
         private var armed = false
         private var finishing = false
+        private var releasedCommit = false
         private var waitingForContent = false
         private var restoring = false
         private var animationGeneration = 0
@@ -100,22 +101,8 @@ struct NativeDeletionPager<Content: View>: UIViewControllerRepresentable {
         @objc private func drag(_ recognizer: UIPanGestureRecognizer) {
             switch recognizer.state {
             case .began:
-                guard let snapshot = host.view.snapshotView(afterScreenUpdates: false) else { return }
-                snapshot.frame = view.bounds
-                snapshot.isUserInteractionEnabled = false
-                snapshot.layer.masksToBounds = true
-                card = snapshot
-                shade.frame = view.bounds
-                shade.alpha = 0.48
-                view.addSubview(shade)
-                view.addSubview(snapshot)
-                guard onBegin() else { discard(); return }
-                suspendScrolling(in: host.view)
-                // Preserve the hit-tested view while its ancestor owns the touch.
-                // Hiding/removing it here can cancel the in-flight touch sequence.
-                host.view.layer.opacity = 0
-                progress = 0
-                armed = false
+                guard let snapshot = host.view.snapshotView(afterScreenUpdates: false),
+                      beginSnapshot(snapshot) else { return }
                 recognizer.setTranslation(.zero, in: view)
             case .changed:
                 guard card != nil, !finishing else { return }
@@ -136,6 +123,25 @@ struct NativeDeletionPager<Content: View>: UIViewControllerRepresentable {
             }
         }
 
+        @discardableResult
+        func beginSnapshot(_ snapshot: UIView) -> Bool {
+            guard card == nil, !finishing, !waitingForContent else { return false }
+            snapshot.frame = view.bounds
+            snapshot.isUserInteractionEnabled = false
+            snapshot.layer.masksToBounds = true
+            card = snapshot
+            shade.frame = view.bounds
+            shade.alpha = 0.48
+            view.addSubview(shade)
+            view.addSubview(snapshot)
+            guard onBegin() else { discard(); return false }
+            suspendScrolling(in: host.view)
+            host.view.layer.opacity = 0
+            progress = 0
+            armed = false
+            return true
+        }
+
         private func suspendScrolling(in view: UIView) {
             if let scroll = view as? UIScrollView, scroll.panGestureRecognizer.isEnabled {
                 suspendedPans.append(scroll.panGestureRecognizer)
@@ -154,9 +160,10 @@ struct NativeDeletionPager<Content: View>: UIViewControllerRepresentable {
             }
         }
 
-        private func settle(commit: Bool) {
+        func settle(commit: Bool) {
             guard let card else { return }
             finishing = true
+            releasedCommit = commit
             onRelease()
             animationGeneration += 1
             let generation = animationGeneration
@@ -198,6 +205,7 @@ struct NativeDeletionPager<Content: View>: UIViewControllerRepresentable {
         }
 
         private func finish(commit: Bool) {
+            guard !waitingForContent else { return }
             waitingForContent = true
             onComplete(commit)
         }
@@ -222,6 +230,7 @@ struct NativeDeletionPager<Content: View>: UIViewControllerRepresentable {
             suspendedPans.forEach { $0.isEnabled = true }
             suspendedPans.removeAll()
             finishing = false
+            releasedCommit = false
             waitingForContent = false
             restoring = false
             progress = 0
@@ -235,16 +244,19 @@ struct NativeDeletionPager<Content: View>: UIViewControllerRepresentable {
             discard()
         }
 
-        @objc private func suspend() {
-            // A confirmed release must finish once; an in-flight drag cancels.
-            guard card != nil, !finishing else { return }
+        @objc func suspend() {
+            // Finish a released deletion once, cancel a finger-down drag, and
+            // restore scrolling even if UIKit never delivers animation completion.
+            guard card != nil else { return }
             animationGeneration += 1
             card?.layer.removeAllAnimations()
-            finishing = true
-            finish(commit: false)
+            shade.layer.removeAllAnimations()
+            if !waitingForContent { finish(commit: finishing && releasedCommit) }
+            restoreIfReady()
             pan.isEnabled = false
             pan.isEnabled = true
         }
+
     }
 }
 

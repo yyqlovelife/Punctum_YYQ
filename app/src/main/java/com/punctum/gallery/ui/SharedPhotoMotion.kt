@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.wrapContentSize
@@ -32,15 +33,17 @@ import com.punctum.gallery.model.Photo
 internal const val SHARED_MOTION_MILLIS = 280
 internal val SharedMotionEase = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
-internal const val DETAIL_ENTRY_MILLIS = 350
-internal val DetailEntryEase = CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
+internal const val DETAIL_MOTION_MILLIS = 350
+internal val DetailMotionEase = CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
 
 // A flight exists only during route navigation. Pager changes never create one.
 internal class PhotoFlight(
     val photoID: String,
     val bitmap: Bitmap,
     val source: Rect,
-    val unifiedEntry: Boolean = false,
+    val unifiedContent: Boolean = false,
+    // The untransformed detail image bounds; supplied when reversing the group.
+    val detailAnchor: Rect? = null,
 ) {
     var destination by mutableStateOf(source)
     val progress = Animatable(0f)
@@ -57,7 +60,6 @@ internal data class SharedPhotoMotion(
     val listBounds: MutableMap<String, Rect>,
     val detailBounds: MutableMap<String, Rect>,
     val flight: PhotoFlight?,
-    val informationAlpha: () -> Float,
 )
 
 internal val LocalSharedPhotoMotion = compositionLocalOf<SharedPhotoMotion?> { null }
@@ -76,7 +78,7 @@ internal fun Modifier.sharedPhotoMotion(id: String, detail: Boolean): Modifier {
     return onGloballyPositioned { anchors[id] = it.boundsInRoot() }
         .graphicsLayer {
             val flight = motion.flight
-            alpha = if (flight?.photoID == id && (!detail || !flight.unifiedEntry)) 0f else 1f
+            alpha = if (flight?.photoID == id && (!detail || !flight.unifiedContent)) 0f else 1f
         }
 }
 
@@ -85,11 +87,11 @@ internal fun Modifier.sharedPhotoMotion(id: String, detail: Boolean): Modifier {
 @Composable
 internal fun Modifier.detailNavigationGroup(id: String): Modifier {
     val flight = LocalSharedPhotoMotion.current?.flight ?: return this
-    if (!flight.unifiedEntry || flight.photoID != id) return this
+    if (!flight.unifiedContent || flight.photoID != id) return this
     // Resolve visibility in composition alongside the temporary thumbnail overlay.
-    val ready = flight.destination != flight.source
+    val ready = flight.detailAnchor != null || flight.destination != flight.source
     return graphicsLayer {
-        val target = flight.destination
+        val target = flight.detailAnchor ?: flight.destination
         alpha = if (ready) 1f else 0f
         if (ready) {
             val bounds = flight.bounds
@@ -98,6 +100,15 @@ internal fun Modifier.detailNavigationGroup(id: String): Modifier {
             scaleY = bounds.height / target.height.coerceAtLeast(1f)
             translationX = bounds.left - target.left * scaleX
             translationY = bounds.top - target.top * scaleY
+            if (flight.detailAnchor != null) {
+                // Collapse the detail envelope to the image while it returns.
+                // Metadata can never extend beyond the landed thumbnail.
+                clip = true
+                shape = GenericShape { size, _ ->
+                    val bottom = size.height + (target.bottom - size.height) * flight.progress.value
+                    addRect(Rect(0f, 0f, size.width, bottom.coerceIn(0f, size.height)))
+                }
+            }
         }
     }
 }

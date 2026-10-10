@@ -133,6 +133,17 @@ enum GalleryReturnPosition {
     }
 }
 
+enum GalleryPhotoSelection {
+    // Metadata can finish after deletion or a foreground refresh changes positions.
+    // Resolve the tapped asset in the current snapshot, never reuse its old offset.
+    static func index(
+        for photoID: String, in photos: [PhotoItem], expectedGalleryID: String, currentGalleryID: String?
+    ) -> Int? {
+        guard currentGalleryID == expectedGalleryID else { return nil }
+        return photos.firstIndex { $0.id == photoID }
+    }
+}
+
 struct PendingPhotoDeletion: Identifiable {
     let id = UUID()
     let photos: [PhotoItem]
@@ -153,11 +164,28 @@ struct PhotoMetadata: Equatable {
 
 // Keys are captured before background sorting so PhotoKit/EXIF lookups stay outside the comparator.
 enum PhotoSortOrder: String, Codable {
-    case capture, modified
-    var label: String { self == .capture ? "拍摄" : "编辑" }
-    var next: Self { self == .capture ? .modified : .capture }
+    case capture, modified, sync
+    var label: String {
+        switch self {
+        case .capture: return "拍摄"
+        case .modified: return "编辑"
+        case .sync: return "同步"
+        }
+    }
+    var next: Self {
+        switch self {
+        case .capture: return .modified
+        case .modified: return .sync
+        case .sync: return .capture
+        }
+    }
+    var accessibilityDescription: String {
+        self == .sync ? "按系统相册自定义的位置排序" : "按\(label)时间排序，最新在前"
+    }
     func precedes(capture lhsCapture: Date, modified lhsModified: Date?, id lhsID: String,
                   capture rhsCapture: Date, modified rhsModified: Date?, id rhsID: String) -> Bool {
+        // Sync keeps PhotoKit's collection order and must never use a time comparator.
+        guard self != .sync else { return false }
         let lhs = self == .capture ? lhsCapture : (lhsModified ?? lhsCapture)
         let rhs = self == .capture ? rhsCapture : (rhsModified ?? rhsCapture)
         if lhs != rhs { return lhs > rhs }

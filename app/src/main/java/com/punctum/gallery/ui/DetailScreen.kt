@@ -34,6 +34,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -124,6 +125,7 @@ import com.punctum.gallery.data.PhotoRepository
 import com.punctum.gallery.data.MotionPhotoService
 import com.punctum.gallery.data.PhotoStill
 import com.punctum.gallery.model.Photo
+import com.punctum.gallery.model.PhotoZoomState
 import com.punctum.gallery.model.SystemAlbum
 import com.punctum.gallery.ui.theme.Bone
 import com.punctum.gallery.ui.theme.DetailSerif
@@ -335,10 +337,15 @@ internal fun DetailScreen(
         }
     }
 
+    val returningFlight = LocalSharedPhotoMotion.current?.flight
+        ?.takeIf { it.unifiedContent && it.detailAnchor != null }
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Ink)
+            .drawBehind {
+                val opacity = returningFlight?.let { 1f - it.progress.value } ?: 1f
+                drawRect(Ink.copy(alpha = opacity))
+            }
             .onSizeChanged { detailRootHeightPx = it.height.toFloat() }
             .pointerInput(visiblePhotos, pagerState.currentPage) {
                 awaitEachGesture {
@@ -512,7 +519,7 @@ internal fun DetailScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Ink),
+                        .then(if (returningFlight != null) Modifier else Modifier.background(Ink)),
                 ) {
                     ImmersivePhoto(
                         photo = visiblePhotos[page],
@@ -857,19 +864,59 @@ private fun ImmersivePhoto(
 ) {
     val context = LocalContext.current
     val pinchScope = rememberCoroutineScope()
-    var photoScale by remember(photo.uri) { mutableFloatStateOf(1f) }
-    var photoPanX by remember(photo.uri) { mutableFloatStateOf(0f) }
-    var photoPanY by remember(photo.uri) { mutableFloatStateOf(0f) }
-    var pinchOrigin by remember(photo.uri) { mutableStateOf(TransformOrigin.Center) }
+    var photoZoom by remember(photo.uri) { mutableStateOf(PhotoZoomState()) }
+    var lastZoomTapTime by remember(photo.uri) { mutableStateOf<Long?>(null) }
+    var lastZoomTapPosition by remember(photo.uri) { mutableStateOf(Offset.Zero) }
     var pinchActive by remember(photo.uri) { mutableStateOf(false) }
     var pinchReturnJob by remember(photo.uri) { mutableStateOf<Job?>(null) }
     val notifyPinch by rememberUpdatedState(onPinchActiveChanged)
+    val navigationFlight = LocalSharedPhotoMotion.current?.flight
     val photoTransform = Modifier.graphicsLayer {
-        scaleX = photoScale
-        scaleY = photoScale
-        translationX = photoPanX
-        translationY = photoPanY
-        transformOrigin = pinchOrigin
+        // The shared return animation uses the original image frame.
+        val pose = if (navigationFlight?.detailAnchor != null) PhotoZoomState() else photoZoom
+        scaleX = pose.scale
+        scaleY = pose.scale
+        translationX = pose.offsetX
+        translationY = pose.offsetY
+        transformOrigin = TransformOrigin.Center
+    }
+    fun clearZoom() {
+        pinchReturnJob?.cancel()
+        pinchReturnJob = null
+        photoZoom = PhotoZoomState()
+        lastZoomTapTime = null
+        if (pinchActive) { pinchActive = false; notifyPinch(false) }
+    }
+    fun resetZoom() {
+        pinchReturnJob?.cancel()
+        lastZoomTapTime = null
+        pinchReturnJob = pinchScope.launch {
+            val start = photoZoom
+            val returning = Animatable(1f)
+            if (ValueAnimator.areAnimatorsEnabled()) {
+                returning.animateTo(0f, spring(dampingRatio = 0.88f, stiffness = 700f)) {
+                    val progress = value.coerceIn(0f, 1f)
+                    photoZoom = PhotoZoomState(
+                        1f + (start.scale - 1f) * progress,
+                        start.offsetX * progress, start.offsetY * progress,
+                    )
+                }
+            }
+            photoZoom = PhotoZoomState()
+            pinchActive = false
+            notifyPinch(false)
+        }
+    }
+    LaunchedEffect(pinchEnabled, navigationFlight?.detailAnchor) {
+        if (!pinchEnabled || navigationFlight?.detailAnchor != null) clearZoom()
+    }
+    val lifecycle = context.findActivity()?.let { it as? androidx.lifecycle.LifecycleOwner }?.lifecycle
+    DisposableEffect(lifecycle, photo.uri) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) clearZoom()
+        }
+        lifecycle?.addObserver(observer)
+        onDispose { lifecycle?.removeObserver(observer) }
     }
     val scrollState = rememberScrollState()
     val configuration = LocalConfiguration.current
@@ -877,7 +924,6 @@ private fun ImmersivePhoto(
     val density = LocalDensity.current
     val hostView = LocalView.current
     val screenHeight = with(density) { hostView.height.toDp() }
-    val navigationMotion = LocalSharedPhotoMotion.current
     var placeName by remember(photo.uri) { mutableStateOf<String?>(null) }
     var motionPlaybackMode by remember(photo.uri) {
         mutableStateOf(MotionPlaybackMode.NONE)
@@ -943,82 +989,102 @@ private fun ImmersivePhoto(
                 if (!pinchEnabled) return@pointerInput
                 try {
                     awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                        var claimed = false
-                        try {
-                            while (true) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                val pressed = event.changes.filter { it.pressed }
-                                if (!claimed && pressed.size >= 2) {
-                                    val top = imageTopPx - scrollState.value
-                                    val bottom = imageBottomPx - scrollState.value
-                                    if (pressed.take(2).all { it.position.x in 0f..size.width.toFloat() && it.position.y in top..bottom }) {
-                                        pinchReturnJob?.cancel()
-                                        claimed = true
-                                        pinchActive = true
-                                        notifyPinch(true)
-                                        setMotionPlayback(MotionPlaybackMode.NONE)
-                                        val center = (pressed[0].position + pressed[1].position) / 2f
-                                        val newOrigin = TransformOrigin(
-                                            (center.x / size.width).coerceIn(0f, 1f),
-                                            ((center.y - top) / (bottom - top)).coerceIn(0f, 1f),
-                                        )
-                                        // Preserve the visible position if a new pinch interrupts the return.
-                                        photoPanX += (pinchOrigin.pivotFractionX - newOrigin.pivotFractionX) * size.width * (1f - photoScale)
-                                        photoPanY += (pinchOrigin.pivotFractionY - newOrigin.pivotFractionY) * (bottom - top) * (1f - photoScale)
-                                        pinchOrigin = newOrigin
-                                    }
+                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        val initialTop = imageTopPx - scrollState.value
+                        val initialHeight = imageBottomPx - imageTopPx
+                        val initialPose = photoZoom
+                        val initialCenter = Offset(size.width / 2f, initialTop + initialHeight / 2f)
+                        var claimed = initialPose.isZoomed &&
+                            down.position.x in
+                                (initialCenter.x + initialPose.offsetX - size.width * initialPose.scale / 2f)..
+                                (initialCenter.x + initialPose.offsetX + size.width * initialPose.scale / 2f) &&
+                            down.position.y in
+                                (initialCenter.y + initialPose.offsetY - initialHeight * initialPose.scale / 2f)..
+                                (initialCenter.y + initialPose.offsetY + initialHeight * initialPose.scale / 2f)
+                        if (claimed) {
+                            pinchReturnJob?.cancel()
+                            pinchActive = true
+                            notifyPinch(true)
+                            setMotionPlayback(MotionPlaybackMode.NONE)
+                            down.consume()
+                        }
+                        var hadMultiplePointers = false
+                        var moved = false
+                        var previousPointerCount = 1
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val pressed = event.changes.filter { it.pressed }
+                            val top = imageTopPx - scrollState.value
+                            val imageHeightPx = imageBottomPx - imageTopPx
+                            val center = Offset(size.width / 2f, top + imageHeightPx / 2f)
+                            if (!claimed && pressed.isNotEmpty()) {
+                                val pose = photoZoom
+                                val left = center.x + pose.offsetX - size.width * pose.scale / 2f
+                                val right = center.x + pose.offsetX + size.width * pose.scale / 2f
+                                val upper = center.y + pose.offsetY - imageHeightPx * pose.scale / 2f
+                                val lower = center.y + pose.offsetY + imageHeightPx * pose.scale / 2f
+                                if ((pressed.size >= 2 || pose.isZoomed) &&
+                                    pressed.take(2).all { it.position.x in left..right && it.position.y in upper..lower }
+                                ) {
+                                    pinchReturnJob?.cancel()
+                                    claimed = true
+                                    pinchActive = true
+                                    notifyPinch(true)
+                                    setMotionPlayback(MotionPlaybackMode.NONE)
                                 }
-                                if (claimed) {
-                                    if (pressed.size >= 2) {
-                                        val previousScale = photoScale
-                                        val nextScale = (previousScale * event.calculateZoom()).coerceIn(1f, 3f)
-                                        if (previousScale > 1f || nextScale > 1f) {
-                                            val zoom = nextScale / previousScale
-                                            val center = event.calculateCentroid(useCurrent = false)
-                                            val pan = event.calculatePan()
-                                            val originX = pinchOrigin.pivotFractionX * size.width
-                                            val originY = imageTopPx - scrollState.value +
-                                                pinchOrigin.pivotFractionY * (imageBottomPx - imageTopPx)
-                                            // Keep the point under the moving fingers stable while zooming too.
-                                            photoPanX = photoPanX * zoom + (center.x - originX) * (1f - zoom) + pan.x
-                                            photoPanY = photoPanY * zoom + (center.y - originY) * (1f - zoom) + pan.y
-                                        }
-                                        photoScale = nextScale
-                                    }
-                                    event.changes.forEach { it.consume() }
-                                }
-                                if (pressed.isEmpty()) break
                             }
-                        } finally {
                             if (claimed) {
-                                pinchReturnJob = pinchScope.launch {
-                                    val startScale = photoScale
-                                    val startPanX = photoPanX
-                                    val startPanY = photoPanY
-                                    val returning = Animatable(1f)
-                                    if (ValueAnimator.areAnimatorsEnabled()) {
-                                        returning.animateTo(0f, spring(dampingRatio = 0.82f, stiffness = 700f)) {
-                                            photoScale = 1f + (startScale - 1f) * value
-                                            photoPanX = startPanX * value
-                                            photoPanY = startPanY * value
-                                        }
-                                    }
-                                    photoScale = 1f
-                                    photoPanX = 0f
-                                    photoPanY = 0f
-                                    pinchActive = false
-                                    notifyPinch(false)
+                                if (pressed.size >= 2) {
+                                    hadMultiplePointers = true
+                                    lastZoomTapTime = null
                                 }
+                                // Rebase when a finger joins/leaves; do not apply a centroid jump.
+                                if (pressed.isNotEmpty() && pressed.size == previousPointerCount) {
+                                    val pan = event.calculatePan()
+                                    val focal = event.calculateCentroid(useCurrent = false) - center
+                                    photoZoom = photoZoom.transform(
+                                        factor = if (pressed.size >= 2) event.calculateZoom() else 1f,
+                                        focalX = focal.x, focalY = focal.y,
+                                        panX = pan.x, panY = pan.y,
+                                        width = size.width.toFloat(), height = imageHeightPx,
+                                    )
+                                }
+                                if (hadMultiplePointers || event.changes.any {
+                                        (it.position - down.position).getDistance() > viewConfiguration.touchSlop
+                                    }) moved = true
+                                event.changes.forEach { it.consume() }
+                            }
+                            previousPointerCount = pressed.size
+                            if (pressed.isEmpty()) {
+                                if (claimed) {
+                                    val up = event.changes.firstOrNull { it.id == down.id }
+                                    if (!hadMultiplePointers && !moved && photoZoom.isZoomed && up != null) {
+                                        val previousTap = lastZoomTapTime
+                                        val interval = previousTap?.let { up.uptimeMillis - it }
+                                        val doubleTapSlop = android.view.ViewConfiguration.get(context).scaledDoubleTapSlop
+                                        if (interval != null && interval in
+                                            viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
+                                            (up.position - lastZoomTapPosition).getDistance() <= doubleTapSlop
+                                        ) {
+                                            resetZoom()
+                                        } else {
+                                            lastZoomTapTime = up.uptimeMillis
+                                            lastZoomTapPosition = up.position
+                                        }
+                                    } else {
+                                        lastZoomTapTime = null
+                                    }
+                                    if (pinchReturnJob?.isActive != true) {
+                                        pinchActive = photoZoom.isZoomed
+                                        notifyPinch(pinchActive)
+                                    }
+                                }
+                                break
                             }
                         }
                     }
                 } finally {
-                    pinchReturnJob?.cancel()
-                    photoScale = 1f
-                    photoPanX = 0f
-                    photoPanY = 0f
-                    if (pinchActive) { pinchActive = false; notifyPinch(false) }
+                    clearZoom()
                 }
             }
             .pointerInput(
@@ -1044,7 +1110,7 @@ private fun ImmersivePhoto(
                                 down.position.x >= size.width - badgeHotWidthPx &&
                                 down.position.y >= displayedImageBottom - badgeHotHeightPx
                         val ignoreGesture =
-                            motionPlaybackMode == MotionPlaybackMode.PLAY_ONCE
+                            pinchActive || motionPlaybackMode == MotionPlaybackMode.PLAY_ONCE
                         var pressed = true
                         var moved = false
                         var playbackStarted = false
@@ -1168,7 +1234,7 @@ private fun ImmersivePhoto(
                 photoTransform = photoTransform,
                 sharedMotion = sharedMotion,
                 onBadgeClick = {
-                    setMotionPlayback(MotionPlaybackMode.PLAY_ONCE)
+                    if (!pinchActive) setMotionPlayback(MotionPlaybackMode.PLAY_ONCE)
                 },
             )
 
@@ -1176,7 +1242,10 @@ private fun ImmersivePhoto(
 
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 30.dp)
                 .graphicsLayer {
-                    alpha = navigationMotion?.informationAlpha?.invoke() ?: 1f
+                    val flight = navigationFlight
+                    alpha = if (flight?.detailAnchor != null && flight.photoID == photo.uri.toString()) {
+                        1f - flight.progress.value
+                    } else 1f
                 }) {
                 Text(
                     "No.$displayNumber",

@@ -10,11 +10,12 @@ struct GalleryScreen: View {
     let onRename: () -> Void
     let sortingEnabled: Bool
     let onToggleSort: () -> Void
-    let onSelectPhoto: (Int, PhotoMetadata, Set<String>) -> Void
+    let onSelectPhoto: (PhotoItem, PhotoMetadata, Set<String>) -> Void
     let onDeletePhoto: (PhotoItem) -> Void
     let returnTargetID: String?
     let onReturnPositioned: (String) -> Void
     var onLoadMore: () -> Void = {}
+    var metadataForPhoto: (PhotoItem) async -> PhotoMetadata = { await MetadataService.shared.metadata(for: $0) }
     @State private var sortOpacity = 1.0
     @State private var visiblePhotoIDs: Set<String> = []
 
@@ -49,20 +50,24 @@ struct GalleryScreen: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 80)
                     } else {
-                        ForEach(Array(stride(from: 0, to: photos.count, by: 2)), id: \.self) { index in
+                        ForEach(GalleryPhotoRow.rows(from: photos)) { row in
+                            let index = row.startIndex
                             OriginalRatioRow(
-                                photos: Array(photos[index..<min(index + 2, photos.count)]),
+                                photos: row.photos,
                                 startIndex: index,
-                                onSelect: { selectedIndex, metadata in
+                                metadataForPhoto: metadataForPhoto,
+                                onSelect: { photo, metadata in
+                                    guard let selectedIndex = photos.firstIndex(where: { $0.id == photo.id }) else { return }
                                     var entryIDs = visiblePhotoIDs
                                     let rowStart = selectedIndex / 2 * 2
                                     for photo in photos[rowStart..<min(rowStart + 2, photos.count)] {
                                         entryIDs.insert(photo.id)
                                     }
-                                    onSelectPhoto(selectedIndex, metadata, entryIDs)
+                                    onSelectPhoto(photo, metadata, entryIDs)
                                 },
                                 onDelete: onDeletePhoto
                             )
+                            .id(row.contentID)
                             .background {
                                 GeometryReader { row in
                                     Color.clear.preference(
@@ -72,7 +77,7 @@ struct GalleryScreen: View {
                                 }
                             }
                             .opacity(sortOpacity)
-                            .id(photos[index].id)
+                            .id(row.id)
                             .onAppear {
                                 if index + 4 >= photos.count {
                                     onLoadMore()
@@ -123,6 +128,21 @@ struct GalleryScreen: View {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(32))
             onReturnPositioned(targetID)
+        }
+    }
+}
+
+struct GalleryPhotoRow: Identifiable {
+    let startIndex: Int
+    let photos: [PhotoItem]
+    // ScrollViewReader must see the first asset ID at the ForEach level, even
+    // before an offscreen row is instantiated. Pair identity resets only content.
+    var id: String { photos[0].id }
+    var contentID: [String] { photos.map(\.id) }
+
+    static func rows(from photos: [PhotoItem]) -> [Self] {
+        stride(from: 0, to: photos.count, by: 2).map { index in
+            Self(startIndex: index, photos: Array(photos[index..<min(index + 2, photos.count)]))
         }
     }
 }
@@ -193,7 +213,7 @@ private struct GalleryHeader: View {
                 .buttonStyle(IconPressButtonStyle())
                 .disabled(!sortingEnabled)
                 .accessibilityLabel("排序 · \(gallery.sortOrder.label)")
-                .accessibilityValue("按\(gallery.sortOrder.label)时间排序，最新在前")
+                .accessibilityValue(gallery.sortOrder.accessibilityDescription)
             }
             .padding(.top, 14)
             .padding(.trailing, 12)
@@ -237,7 +257,8 @@ private struct GalleryBackArrow: View {
 private struct OriginalRatioRow: View {
     let photos: [PhotoItem]
     let startIndex: Int
-    let onSelect: (Int, PhotoMetadata) -> Void
+    let metadataForPhoto: (PhotoItem) async -> PhotoMetadata
+    let onSelect: (PhotoItem, PhotoMetadata) -> Void
     let onDelete: (PhotoItem) -> Void
 
     private var aspects: [CGFloat] {
@@ -262,8 +283,9 @@ private struct OriginalRatioRow: View {
                         ForEach(Array(photos.enumerated()), id: \.element.id) { offset, photo in
                             PhotoGridCell(
                                 photo: photo,
+                                metadataForPhoto: metadataForPhoto,
                                 onSelect: { metadata in
-                                    onSelect(startIndex + offset, metadata)
+                                    onSelect(photo, metadata)
                                 },
                                 onDelete: { onDelete(photo) }
                             )
@@ -290,6 +312,7 @@ private struct OriginalRatioRow: View {
 
 private struct PhotoGridCell: View {
     let photo: PhotoItem
+    let metadataForPhoto: (PhotoItem) async -> PhotoMetadata
     let onSelect: (PhotoMetadata) -> Void
     let onDelete: () -> Void
 
@@ -303,14 +326,15 @@ private struct PhotoGridCell: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             GridPressCatcher(
+                photoID: photo.id,
                 onTouchDown: {
                     Task(priority: .userInitiated) {
-                        _ = await MetadataService.shared.metadata(for: photo)
+                        _ = await metadataForPhoto(photo)
                     }
                 },
                 onTap: {
                     Task(priority: .userInitiated) {
-                        let metadata = await MetadataService.shared.metadata(for: photo)
+                        let metadata = await metadataForPhoto(photo)
                         guard !Task.isCancelled else { return }
                         onSelect(metadata)
                     }
@@ -328,6 +352,7 @@ private struct PhotoGridCell: View {
 }
 
 private struct GridPressCatcher: UIViewRepresentable {
+    let photoID: String
     var onTouchDown: () -> Void
     var onTap: () -> Void
     var onCommit: () -> Void
@@ -344,13 +369,14 @@ private struct GridPressCatcher: UIViewRepresentable {
 
     func updateUIView(_ uiView: GridPressView, context: Context) {
         uiView.onTouchDown = onTouchDown
-        context.coordinator.onTap = onTap
+        uiView.onTap = onTap
+        uiView.accessibilityIdentifier = "photo-grid-touch-\(photoID)"
+        uiView.accessibilityValue = photoID
         context.coordinator.onCommit = onCommit
         context.coordinator.view = uiView
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var onTap: () -> Void = {}
         var onCommit: () -> Void = {}
         weak var view: GridPressView?
         private var ignoreTap = false
@@ -404,7 +430,7 @@ private struct GridPressCatcher: UIViewRepresentable {
 
         @objc private func handleTap() {
             guard !ignoreTap else { return }
-            onTap()
+            view?.onTap()
         }
 
         @objc private func handlePreview(_ recognizer: UILongPressGestureRecognizer) {
@@ -461,6 +487,7 @@ private struct GridPressCatcher: UIViewRepresentable {
 }
 
 final class GridPressView: UIView {
+    var onTap: () -> Void = {}
     var onTouchDown: () -> Void = {}
     var progress: CGFloat = 0 {
         didSet { badge.progress = progress }

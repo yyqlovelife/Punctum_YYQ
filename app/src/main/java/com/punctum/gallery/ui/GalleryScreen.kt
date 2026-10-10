@@ -65,7 +65,6 @@ import coil.request.ImageRequest
 import com.punctum.gallery.data.PhotoStill
 import com.punctum.gallery.model.Gallery
 import com.punctum.gallery.model.GalleryOverview
-import com.punctum.gallery.model.GalleryStyle
 import com.punctum.gallery.model.Photo
 import com.punctum.gallery.ui.theme.Bone
 import com.punctum.gallery.ui.theme.Gold
@@ -477,6 +476,19 @@ private fun GalleryHeader(
                     modifier = Modifier.alignByBaseline(),
                 )
             }
+
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "关于 $count 幅作品的故事",
+                modifier = Modifier.alignByBaseline(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = Muted,
+            )
             Spacer(Modifier.weight(1f))
             Text(
                 "排序 · ${gallery.sortOrder.label}",
@@ -493,25 +505,6 @@ private fun GalleryHeader(
                         activateImmediatelyOnRelease = true,
                         onClick = onToggleSort,
                     ),
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(end = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "关于 $count 幅作品的故事",
-                modifier = Modifier.alignByBaseline(),
-                style = MaterialTheme.typography.bodyMedium,
-                color = Muted,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                "风格 · ${GalleryStyle.from(gallery.styleId).label}",
-                modifier = Modifier.alignByBaseline(),
-                style = MaterialTheme.typography.labelSmall,
-                color = Gold.copy(alpha = 0.8f),
             )
         }
         Spacer(Modifier.height(16.dp))

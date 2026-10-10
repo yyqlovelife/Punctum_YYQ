@@ -33,8 +33,8 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.platform.LocalContext
 import com.punctum.gallery.ui.SharedPhotoMotion
 import com.punctum.gallery.ui.SHARED_MOTION_MILLIS
-import com.punctum.gallery.ui.DETAIL_ENTRY_MILLIS
-import com.punctum.gallery.ui.DetailEntryEase
+import com.punctum.gallery.ui.DETAIL_MOTION_MILLIS
+import com.punctum.gallery.ui.DetailMotionEase
 import com.punctum.gallery.ui.navigationMotionGuard
 import com.punctum.gallery.ui.SharedMotionEase
 import androidx.compose.animation.AnimatedVisibility
@@ -253,7 +253,6 @@ private fun PunctumApp(vm: GalleryViewModel) {
     var detailClosing by remember { mutableStateOf(false) }
     var activePhotoID by remember { mutableStateOf<String?>(null) }
     var detailOpening by remember { mutableStateOf(false) }
-    val detailInformationAlpha = remember { Animatable(1f) }
     var photoFlight by remember { mutableStateOf<PhotoFlight?>(null) }
     val context = LocalContext.current
     val current = vm.currentGallery
@@ -266,7 +265,6 @@ private fun PunctumApp(vm: GalleryViewModel) {
             photoFlight = null
             detailOpening = false
             detailClosing = false
-            detailInformationAlpha.snapTo(1f)
             return@LaunchedEffect
         }
         if (!detailOpening || vm.detailReturnPending) return@LaunchedEffect
@@ -278,8 +276,8 @@ private fun PunctumApp(vm: GalleryViewModel) {
             androidx.compose.runtime.withFrameNanos { }
             flight.destination = detailPhotoBounds[flight.photoID] ?: target
             // The detail page now moves as one picture-and-information group.
-            flight.progress.animateTo(1f, tween(DETAIL_ENTRY_MILLIS, easing = DetailEntryEase))
-        } else detailInformationAlpha.snapTo(1f)
+            flight.progress.animateTo(1f, tween(DETAIL_MOTION_MILLIS, easing = DetailMotionEase))
+        }
         photoFlight = null
         detailOpening = false
     }
@@ -360,7 +358,6 @@ private fun PunctumApp(vm: GalleryViewModel) {
         LocalHomeAnchors provides homeAnchors,
         LocalSharedPhotoMotion provides SharedPhotoMotion(
             listPhotoBounds, detailPhotoBounds, photoFlight,
-            informationAlpha = { detailInformationAlpha.value },
 
         ),
     ) {
@@ -450,25 +447,25 @@ private fun PunctumApp(vm: GalleryViewModel) {
                             androidx.compose.runtime.withFrameNanos { }
                             androidx.compose.runtime.withFrameNanos { }
                             if (ValueAnimator.areAnimatorsEnabled()) {
-                                // Complete the information exit while the image stays still.
-                                detailInformationAlpha.animateTo(0f, tween(80, easing = SharedMotionEase))
-                                androidx.compose.runtime.withFrameNanos { }
                                 val id = activePhotoID
                                 val photo = vm.photos.firstOrNull { it.uri.toString() == id }
-                                val source = photoFlight?.takeIf { it.photoID == id }?.bounds
+                                val interrupted = photoFlight?.takeIf { it.photoID == id }
+                                val source = interrupted?.bounds ?: detailPhotoBounds[id]
+                                val anchor = interrupted?.let { it.detailAnchor ?: it.destination }
                                     ?: detailPhotoBounds[id]
                                 val target = listPhotoBounds[id]
                                 val bitmap = photo?.let { photoMotionBitmap(context, it, detail = true) }
                                 val flight = if (id != null && id == vm.galleryReturnPhotoID &&
-                                    source != null && target != null && bitmap != null) {
-                                    PhotoFlight(id, bitmap, source).also { it.destination = target }
+                                    source != null && target != null && anchor != null && bitmap != null) {
+                                    PhotoFlight(id, bitmap, source, unifiedContent = true, detailAnchor = anchor)
+                                        .also { it.destination = target }
                                 } else null
                                 photoFlight = flight
                                 detailOpening = false
                                 detailClosing = true
                                 if (flight != null) {
-                                    flight.progress.animateTo(1f, tween(SHARED_MOTION_MILLIS, easing = SharedMotionEase))
-                                } else delay(SHARED_MOTION_MILLIS.toLong())
+                                    flight.progress.animateTo(1f, tween(DETAIL_MOTION_MILLIS, easing = DetailMotionEase))
+                                } else delay(DETAIL_MOTION_MILLIS.toLong())
                             }
                             vm.finishDetailReturn()
                             photoFlight = null
@@ -510,10 +507,9 @@ private fun PunctumApp(vm: GalleryViewModel) {
                                 // Discard old off-screen pager geometry before a new visit.
                                 detailPhotoBounds.clear()
                                 photoFlight = if (ValueAnimator.areAnimatorsEnabled() && id != null &&
-                                    source != null && bitmap != null) PhotoFlight(id, bitmap, source, unifiedEntry = true) else null
+                                    source != null && bitmap != null) PhotoFlight(id, bitmap, source, unifiedContent = true) else null
                                 detailOpening = photoFlight != null
                                 transitionScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
-                                    detailInformationAlpha.snapTo(1f)
                                     vm.openDetail(index)
                                 }
                             }
@@ -560,9 +556,12 @@ private fun PunctumApp(vm: GalleryViewModel) {
         if (detailIndex != null && vm.photos.isNotEmpty()) {
             val detailAlpha by androidx.compose.animation.core.animateFloatAsState(
                 targetValue = if (detailClosing) 0f else 1f,
-                animationSpec = tween(SHARED_MOTION_MILLIS), label = "detail-background",
+                animationSpec = tween(DETAIL_MOTION_MILLIS, easing = DetailMotionEase), label = "detail-background",
             )
-            Box(Modifier.fillMaxSize().navigationMotionGuard(detailOpening || detailClosing || vm.detailReturnPending).graphicsLayer { alpha = detailAlpha }) {
+            Box(Modifier.fillMaxSize().navigationMotionGuard(detailOpening || detailClosing || vm.detailReturnPending).graphicsLayer {
+                val flight = photoFlight
+                alpha = if (detailClosing && flight?.unifiedContent == true) 1f else detailAlpha
+            }) {
             DetailScreen(
                 photos = vm.photos,
                 startIndex = detailIndex,
@@ -582,7 +581,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
             }
         }
 
-        photoFlight?.takeIf { !it.unifiedEntry || it.destination == it.source }
+        photoFlight?.takeIf { !it.unifiedContent || (it.detailAnchor == null && it.destination == it.source) }
             ?.let { PhotoFlightOverlay(it) }
 
         if (showAlbumPicker) {

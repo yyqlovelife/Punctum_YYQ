@@ -1,9 +1,11 @@
 package com.punctum.gallery.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -12,6 +14,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,7 +34,23 @@ internal fun EmptyScreen(onPickFolder: () -> Unit) {
     ) {
         Text("P U N C T U M", style = MaterialTheme.typography.labelSmall, color = Muted)
         Spacer(Modifier.height(22.dp))
-        Text("Select Exhibition", style = MaterialTheme.typography.displayMedium, color = Bone, textAlign = TextAlign.Center)
+        BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            val title = "Select Exhibition"
+            val titleStyle = MaterialTheme.typography.displayMedium.copy(fontSize = 32.sp)
+            val measuredWidth = rememberTextMeasurer().measure(
+                title, style = titleStyle, softWrap = false, maxLines = 1,
+            ).size.width
+            val availableWidth = with(LocalDensity.current) { maxWidth.toPx() } - 1f
+            val fit = (availableWidth / measuredWidth.coerceAtLeast(1)).coerceIn(0f, 1f)
+            Text(
+                title,
+                style = titleStyle.copy(fontSize = 32.sp * fit),
+                color = Bone,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
         Spacer(Modifier.height(18.dp))
         Text(
             "选择一个图集，作为你的第一个画廊\n让每一次回望，都重新感受影像的重量",
