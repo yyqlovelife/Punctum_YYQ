@@ -94,6 +94,7 @@ import com.punctum.gallery.model.InvitationCardStyle
 import com.punctum.gallery.ui.DetailScreen
 import com.punctum.gallery.ui.EmptyScreen
 import com.punctum.gallery.ui.GalleryScreen
+import com.punctum.gallery.ui.FilmReviewScreen
 import com.punctum.gallery.ui.SwitcherScreen
 import com.punctum.gallery.ui.theme.Bone
 import com.punctum.gallery.ui.theme.Gold
@@ -336,6 +337,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
 
     fun requestHome() {
         if (currentKey == null || galleryExitInProgress) return
+        if (vm.invitationStyle == InvitationCardStyle.REVERSAL_FILM && !vm.requestFilmGalleryExit()) return
         if (!layeredHomeGalleryMotion) {
             vm.goHome()
             return
@@ -351,6 +353,13 @@ private fun PunctumApp(vm: GalleryViewModel) {
             )
             if (vm.currentUri == currentKey) vm.goHome()
             galleryExitInProgress = false
+        }
+    }
+
+    LaunchedEffect(vm.filmExitReady) {
+        if (vm.filmExitReady) {
+            vm.consumeFilmExit()
+            requestHome()
         }
     }
 
@@ -428,6 +437,25 @@ private fun PunctumApp(vm: GalleryViewModel) {
                     .background(Ink),
             ) {
                 key(currentKey) {
+                    if (vm.invitationStyle == InvitationCardStyle.REVERSAL_FILM) {
+                        FilmReviewScreen(
+                            gallery = current,
+                            photos = vm.photos,
+                            overview = vm.overviews[currentKey],
+                            loading = vm.loadingPhotos,
+                            sorting = vm.sortingPhotos,
+                            queuedIDs = vm.filmQueuedDeletionIDs,
+                            deleting = vm.filmDeletionInProgress,
+                            onExit = ::requestHome,
+                            onRename = { renameTarget = it },
+                            onToggleSort = vm::togglePhotoSort,
+                            onDelete = vm::queueFilmDeletion,
+                            onWarmImages = vm::warmDetailImages,
+                            onWarmThumbnails = vm::warmGalleryThumbnails,
+                            onPauseThumbnails = vm::pauseGalleryThumbnails,
+                            onContentReady = { if (vm.currentUri == currentKey) readyGalleryKey = currentKey },
+                        )
+                    } else {
                     val listState = rememberLazyListState()
                     var detailEntryVisibleIDs by remember { mutableStateOf(emptySet<String>()) }
                     val listDragged by listState.interactionSource.collectIsDraggedAsState()
@@ -521,6 +549,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
                             if (vm.currentUri == currentKey) readyGalleryKey = currentKey
                         },
                     )
+                    }
                 }
             }
         }
@@ -688,7 +717,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
             },
             text = {
                 Text(
-                    "确定删除后，所选照片将移入系统相册回收站",
+                    "被删除的项目将会进入系统相册回收站",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Muted,
                 )

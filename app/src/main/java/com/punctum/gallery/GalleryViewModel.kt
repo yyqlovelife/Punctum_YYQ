@@ -46,6 +46,13 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     private var systemAlbumsJob: Job? = null
     private var pendingDeletePhotos: List<Photo> = emptyList()
     private val queuedDetailDeletePhotos = mutableListOf<Photo>()
+    var filmQueuedDeletionIDs by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var filmDeletionInProgress by mutableStateOf(false)
+        private set
+    var filmExitReady by mutableStateOf(false)
+        private set
+    private var filmExitRequested = false
     private var pendingMovePhoto: Photo? = null
     private var pendingMoveDestination: SystemAlbum? = null
     private var moveInProgress: Photo? = null
@@ -390,6 +397,10 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun goHome() {
+        filmQueuedDeletionIDs = emptySet()
+        queuedDetailDeletePhotos.clear()
+        filmExitRequested = false
+        filmExitReady = false
         gallerySortGeneration += 1
         gallerySortJob?.cancel()
         sortingPhotos = false
@@ -557,9 +568,38 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun queueFilmDeletion(photo: Photo) {
+        if (filmDeletionInProgress) return
+        queueDetailDeletion(photo)
+        filmQueuedDeletionIDs = filmQueuedDeletionIDs + photo.uri.toString()
+    }
+
+    /** Keep the gallery alive until the batch and any system permission flow finish. */
+    fun requestFilmGalleryExit(): Boolean {
+        if (filmDeletionInProgress) return false
+        val pending = queuedDetailDeletePhotos.distinctBy { it.uri }
+        if (pending.isEmpty()) return true
+        filmExitRequested = true
+        pendingDetailDeleteConfirmation = pending
+        return false
+    }
+
+    fun consumeFilmExit() { filmExitReady = false }
+
+    private fun finishFilmDeletion(success: Boolean) {
+        if (!filmExitRequested) return
+        filmExitRequested = false
+        filmDeletionInProgress = false
+        filmQueuedDeletionIDs = emptySet()
+        queuedDetailDeletePhotos.clear()
+        filmExitReady = success
+        if (!success) homeToast = "删除未完成，未删除的项目已保留"
+    }
+
     fun confirmDetailDeletion() {
         val photosToDelete = pendingDetailDeleteConfirmation ?: return
         pendingDetailDeleteConfirmation = null
+        if (filmExitRequested) filmDeletionInProgress = true
         photosToDelete.forEach(::markDeleting)
         removePhotosFromState(photosToDelete)
         performDetailDelete(photosToDelete)
@@ -568,6 +608,12 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelDetailDeletion() {
         if (pendingDetailDeleteConfirmation == null) return
         pendingDetailDeleteConfirmation = null
+        if (filmExitRequested) {
+            filmExitRequested = false
+            filmQueuedDeletionIDs = emptySet()
+            queuedDetailDeletePhotos.clear()
+            filmExitReady = true
+        }
     }
 
     private fun performDetailDelete(photosToDelete: List<Photo>) {
@@ -575,6 +621,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             val gallery = currentGallery
             if (gallery == null) {
                 restorePhotosToState(photosToDelete)
+                finishFilmDeletion(false)
                 return@launch
             }
             when (
@@ -584,13 +631,14 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                     photosToDelete,
                 )
             ) {
-                PhotoRepository.DeleteResult.Deleted -> Unit
+                PhotoRepository.DeleteResult.Deleted -> finishFilmDeletion(true)
                 PhotoRepository.DeleteResult.NeedsMediaManagementPermission -> {
                     pendingDeletePhotos = photosToDelete
                     pendingMediaManagementPermission = true
                 }
                 PhotoRepository.DeleteResult.Failed -> {
                     restorePhotosToState(photosToDelete)
+                    finishFilmDeletion(false)
                 }
                 is PhotoRepository.DeleteResult.NeedsUserAction -> {
                     pendingDeletePhotos = result.pendingUris?.let { pendingUris ->
@@ -602,6 +650,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                     restorePhotosToState(
                         photosToDelete.filter { it.uri in result.undeletedUris },
                     )
+                    finishFilmDeletion(false)
                 }
             }
         }
@@ -616,6 +665,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             performDetailDelete(photos)
         } else {
             restorePhotosToState(photos)
+            finishFilmDeletion(false)
         }
     }
 
@@ -626,6 +676,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         if (!confirmed && photos.isNotEmpty()) {
             restorePhotosToState(photos)
         }
+        finishFilmDeletion(confirmed)
     }
 
     fun movePhoto(photo: Photo, destination: SystemAlbum) {

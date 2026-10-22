@@ -362,7 +362,7 @@ private fun OriginalRatioRow(
 }
 
 @Composable
-private fun DeleteProgressBadge(
+internal fun DeleteProgressBadge(
     progress: Float,
     size: Dp = 34.dp,
 ) {
