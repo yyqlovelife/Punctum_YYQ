@@ -35,3 +35,7 @@ JDK 使用 Android Studio 随附 JBR，运行 `./gradlew :app:assembleRelease :a
 ## 新机回归结果
 
 0.6.0/61 已保留数据安装新 PMA110（末尾 L2N00000），设备包与本地正式 APK 哈希一致。空态/选片/边缘点按和横滑、参数常驻、菜单排序保持/恢复、重命名取消、按住取消与排队、退出统一确认及取消恢复均已通过。本次未实际删除照片。最终手机停在图集投影页。GitHub 精确提交与树核验记录见发布验证文档。
+
+## GitHub 已发布
+
+源码与本轮文档已发布到 main 的 [`929f92e`](https://github.com/yyqlovelife/Punctum_YYQ/commit/929f92e7dde89e8057ac0eb153ce7aed24dbb33e)，远端 191 个文件已与本地发布树逐项核对一致。常规推送失败后使用 Git Data API 非强制更新；本地后续工作在 `codex/android-0.6.0-release`，原开发分支与源提交保留。本节是源码发布后的文档核验补充，最终 main 提交以会话报告为准。

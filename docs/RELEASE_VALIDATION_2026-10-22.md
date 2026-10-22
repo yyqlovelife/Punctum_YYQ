@@ -26,6 +26,8 @@ Android **0.6.0/61**。上次 GitHub 为 0.5.9/59，开发试用阶段为 0.6.0/
 
 ## GitHub 发布
 
-目标 `yyqlovelife/Punctum_YYQ` 的 `main`。发布前基线 `ba3c93ac49722edbc11e8fed591f7b8171578a9e`，发布完整 Android 源码、布局测试、版本配置及日志、README、交接和验证文档。待远端核验后填写结果。
+目标 `yyqlovelife/Punctum_YYQ` 的 `main`。发布前基线 `ba3c93ac49722edbc11e8fed591f7b8171578a9e`，完整 Android 源码、布局测试、版本配置及日志、README、交接和验证文档已发布至 [源码提交 `929f92e`](https://github.com/yyqlovelife/Punctum_YYQ/commit/929f92e7dde89e8057ac0eb153ce7aed24dbb33e)。常规 Git 推送报 curl 55 后，通过 GitHub Git Data API 上传并非强制更新分支；重新查询 main 与递归树，全部 **191 个文件**的路径、模式、类型和 blob 与本地发布树逐项一致，树为 `ee92747a7534ea82d069d7fd4baeb10dede6cd14`。本轮 16 个变更文件均已包含。随后补充本节核验结果，最终 main 的文档补充提交以会话最终报告为准。
+
+本地已获取远端提交并切换至 `codex/android-0.6.0-release` 接续，原开发分支及源提交 `5931b4e` 保留；两者发布文件树完全一致，避免远端备用上传导致后续开发接错历史。
 
 APK/IPA、签名凭据、本机配置、原始截图/录像和私有照片不上传；NAS 按用户最后要求不更新。
