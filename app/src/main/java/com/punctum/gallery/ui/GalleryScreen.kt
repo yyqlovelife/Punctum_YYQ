@@ -291,7 +291,6 @@ private fun OriginalRatioRow(
                                 coroutineScope {
                                     var pressed = true
                                     var deleteStarted = false
-                                    var deleteCommitted = false
                                     val deleteJob = launch {
                                         delay(200)
                                         if (!pressed) return@launch
@@ -308,23 +307,22 @@ private fun OriginalRatioRow(
                                             ),
                                         )
                                         if (pressed) {
-                                            deleteCommitted = true
+                                            showDeleteProgress = false
                                             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                             onDeletePhoto(photo)
                                         }
                                     }
 
-                                    val released = tryAwaitRelease()
-                                    pressed = false
-                                    if (!deleteStarted && released) {
-                                        onSelectPhoto(rowStartIndex + offset)
-                                    }
-                                    deleteJob.cancel()
-                                    if (!deleteCommitted) {
-                                        deleteProgress.animateTo(
-                                            targetValue = 0f,
-                                            animationSpec = tween(durationMillis = 120),
-                                        )
+                                    try {
+                                        val released = tryAwaitRelease()
+                                        pressed = false
+                                        deleteJob.cancel()
+                                        if (!deleteStarted && released) {
+                                            onSelectPhoto(rowStartIndex + offset)
+                                        }
+                                    } finally {
+                                        pressed = false
+                                        deleteJob.cancel()
                                         showDeleteProgress = false
                                     }
                                 }

@@ -366,13 +366,8 @@ object PhotoRepository {
                                 )
                             }
                         } else {
-                            DeleteResult.NeedsUserAction(
-                                MediaStore.createTrashRequest(
-                                    context.contentResolver,
-                                    listOf(mediaUri),
-                                    true,
-                                ),
-                            )
+                            // Obtain the one-time special permission before submitting a trash request.
+                            DeleteResult.NeedsMediaManagementPermission
                         }
                     }
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mediaUri != null -> {
@@ -447,6 +442,8 @@ object PhotoRepository {
                         DeleteResult.PartialFailure(failedUris.toSet())
                     }
                 }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                DeleteResult.NeedsMediaManagementPermission
             } else {
                 DeleteResult.NeedsUserAction(
                     pendingIntent = MediaStore.createTrashRequest(

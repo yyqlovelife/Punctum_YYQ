@@ -115,6 +115,7 @@ internal fun FilmReviewScreen(
     onRename: (Gallery) -> Unit,
     onToggleSort: () -> Unit,
     onDelete: (Photo) -> Unit,
+    onRequestListDelete: (Photo) -> Unit,
     onWarmImages: (Int) -> Unit,
     onWarmThumbnails: (Int, Int) -> Unit,
     onPauseThumbnails: () -> Unit,
@@ -348,7 +349,7 @@ internal fun FilmReviewScreen(
                                                     selected = photo.uri.toString() == selectedID,
                                                     enabled = !pager.isScrollInProgress && !sorting && !deleting,
                                                     onSelect = { if (!pager.isScrollInProgress) select(photo, true) },
-                                                    onDelete = { if (!pager.isScrollInProgress) queuePhotoDeletion(photo) },
+                                                    onDelete = { if (!pager.isScrollInProgress) onRequestListDelete(photo) },
                                                     onReady = { readyIDs = readyIDs + photo.uri.toString() },
                                                 )
                                             }

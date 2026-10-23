@@ -450,6 +450,7 @@ private fun PunctumApp(vm: GalleryViewModel) {
                             onRename = { renameTarget = it },
                             onToggleSort = vm::togglePhotoSort,
                             onDelete = vm::queueFilmDeletion,
+                            onRequestListDelete = vm::deletePhoto,
                             onWarmImages = vm::warmDetailImages,
                             onWarmThumbnails = vm::warmGalleryThumbnails,
                             onPauseThumbnails = vm::pauseGalleryThumbnails,
@@ -695,22 +696,26 @@ private fun PunctumApp(vm: GalleryViewModel) {
         }
     }
 
-    vm.pendingDetailDeleteConfirmation?.let { pendingPhotos ->
+    val listDeletion = vm.pendingListDeleteConfirmation
+    val deletionPhotos = listDeletion?.let { listOf(it) } ?: vm.pendingDetailDeleteConfirmation
+    deletionPhotos?.let { pendingPhotos ->
+        val cancel = if (listDeletion != null) vm::cancelListDeletion else vm::cancelDetailDeletion
+        val confirm = if (listDeletion != null) vm::confirmListDeletion else vm::confirmDetailDeletion
         AlertDialog(
-            onDismissRequest = vm::cancelDetailDeletion,
+            onDismissRequest = cancel,
             confirmButton = {
-                TextButton(onClick = vm::confirmDetailDeletion) {
+                TextButton(onClick = confirm) {
                     Text("确定删除", color = Color(0xFFE24646))
                 }
             },
             dismissButton = {
-                TextButton(onClick = vm::cancelDetailDeletion) {
+                TextButton(onClick = cancel) {
                     Text("取消", color = Muted)
                 }
             },
             title = {
                 Text(
-                    "本次删除 ${pendingPhotos.size} 项",
+                    if (listDeletion != null) "确定删除这张照片？" else "本次删除 ${pendingPhotos.size} 项",
                     style = MaterialTheme.typography.titleLarge,
                     color = Bone,
                 )

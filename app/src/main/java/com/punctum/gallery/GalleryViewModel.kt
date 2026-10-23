@@ -77,6 +77,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var pendingDeleteConfirmation by mutableStateOf<PendingIntent?>(null)
         private set
+    var pendingListDeleteConfirmation by mutableStateOf<Photo?>(null)
+        private set
+    private var listDeletionInProgress = false
     var pendingDetailDeleteConfirmation by mutableStateOf<List<Photo>?>(null)
         private set
     var pendingMediaManagementPermission by mutableStateOf(false)
@@ -526,40 +529,22 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** All thumbnail lists ask before changing selection, visibility or media. */
     fun deletePhoto(photo: Photo) {
-        markDeleting(photo)
-        removePhotoFromState(photo)
-        performDelete(photo)
+        if (listDeletionInProgress || filmDeletionInProgress || pendingListDeleteConfirmation != null ||
+            pendingDetailDeleteConfirmation != null) return
+        pendingListDeleteConfirmation = photo
     }
 
-    private fun performDelete(photo: Photo) {
-        viewModelScope.launch {
-            val gallery = currentGallery
-            if (gallery == null) {
-                clearDeleting(photo)
-                refreshCurrentData()
-                return@launch
-            }
-            when (val result = PhotoRepository.deletePhoto(getApplication(), gallery.uri, photo)) {
-                PhotoRepository.DeleteResult.Deleted -> Unit
-                PhotoRepository.DeleteResult.NeedsMediaManagementPermission -> {
-                    pendingDeletePhotos = listOf(photo)
-                    pendingMediaManagementPermission = true
-                }
-                PhotoRepository.DeleteResult.Failed -> {
-                    restorePhotosToState(listOf(photo))
-                }
-                is PhotoRepository.DeleteResult.NeedsUserAction -> {
-                    pendingDeletePhotos = listOf(photo)
-                    pendingDeleteConfirmation = result.pendingIntent
-                }
-                is PhotoRepository.DeleteResult.PartialFailure -> {
-                    restorePhotosToState(
-                        listOf(photo).filter { it.uri in result.undeletedUris },
-                    )
-                }
-            }
-        }
+    fun cancelListDeletion() { pendingListDeleteConfirmation = null }
+
+    fun confirmListDeletion() {
+        val photo = pendingListDeleteConfirmation ?: return
+        pendingListDeleteConfirmation = null
+        listDeletionInProgress = true
+        markDeleting(photo)
+        removePhotoFromState(photo)
+        performDetailDelete(listOf(photo))
     }
 
     fun queueDetailDeletion(photo: Photo) {
@@ -587,6 +572,8 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeFilmExit() { filmExitReady = false }
 
     private fun finishFilmDeletion(success: Boolean) {
+        if (listDeletionInProgress && !success) homeToast = "删除未完成，照片已保留"
+        listDeletionInProgress = false
         if (!filmExitRequested) return
         filmExitRequested = false
         filmDeletionInProgress = false
