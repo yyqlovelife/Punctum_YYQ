@@ -13,7 +13,8 @@
 - Android：**0.7.0/77**，正式包 `APK/Punctum-0.7.0-release.apk`。
 - iOS：**0.5.10/60**，本轮未改、未重建、未安装，尚未移植Android新胶片体验。
 - GitHub：`https://github.com/yyqlovelife/Punctum_YYQ`，发布分支`main`。
-- 本地接续分支在发布记录中注明；新对话以实时`git status`、`git log -1`、远端main为准。
+- 本地接续分支 `codex/android-0.7.0-release`，版本标签 `android-v0.7.0`；新对话以实时`git status`、`git log -1`、远端main为准。
+- 源码提交 `89831a0f18f621f8f6e3ffec66a54c5faa8d72bf` 已上传，211文件完整树比对通过；之后的文档补充提交与标签见远端。
 - 发布SHA、APK SHA256、测试/手机与远端核验结果集中在 `docs/RELEASE_VALIDATION_2026-10-30.md`。APK、IPA、签名、本机配置、原始照片/录像和 `docs/verification/` 均排除Git。
 
 ## 已验收的产品效果

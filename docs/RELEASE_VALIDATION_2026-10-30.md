@@ -24,4 +24,8 @@ iOS仍0.5.10/60，本轮未改、未构建。Demo本轮未改、未发布，后�
 
 ## GitHub发布核验
 
-目标 `yyqlovelife/Punctum_YYQ` / `main`，发布前远端基线 `5ad81c7f1db4c71d10a0e91ae2e62d52f13c65f9`，本地同基线。上传完成后补充源码提交、文件树和远端比对结果；完成状态以本节后续核验及远端main为准。
+目标 `yyqlovelife/Punctum_YYQ` / `main`，发布前远端基线 `5ad81c7f1db4c71d10a0e91ae2e62d52f13c65f9`。常规Git push遭遇curl55连接中断，通过已认证Git Data API上传blob/tree/commit，非强制更新main。
+
+源码与完整文档已发布至 [89831a0](https://github.com/yyqlovelife/Punctum_YYQ/commit/89831a0f18f621f8f6e3ffec66a54c5faa8d72bf)，tree `72db69485e535f790595b133bc3c2d269c822fe0`。独立重查远端main及递归树，**211个文件**的路径、类型、模式和blob SHA与本地逐项一致；树未截断，二进制胶片资源也核对SHA。未包含任何APK/IPA、签名、本机配置或私有验证素材。
+
+本节核验结果随后以文档补充提交发布；最终main高于上述源码提交，源码行为与0.7.0锁版保持一致。版本标签 `android-v0.7.0` 指向补充文档后的锁版提交。新对话本地分支 `codex/android-0.7.0-release`；以实时main/tag与完整树核验为准。
