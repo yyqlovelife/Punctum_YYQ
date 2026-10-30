@@ -21,6 +21,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -37,7 +38,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -140,6 +143,7 @@ private val EmphasizedHomeStyleEnterOffset = 12.dp
 private val EmphasizedHomeStyleExitOffset = 8.dp
 private val HomeStyleEaseOut = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SwitcherScreen(
     overviews: List<GalleryOverview>,
@@ -169,7 +173,7 @@ internal fun SwitcherScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Ink)
-            .statusBarsPadding(),
+            .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility),
     ) {
         Row(
             modifier = Modifier

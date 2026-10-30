@@ -5,6 +5,13 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.os.Build
+import android.view.WindowManager
+import android.view.HapticFeedbackConstants
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import org.json.JSONArray
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -13,6 +20,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -35,13 +44,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -56,13 +72,20 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.content.res.ResourcesCompat
 import android.graphics.Paint
 import android.graphics.Rect
 import android.widget.Toast
 import coil.Coil
+import coil.compose.AsyncImagePainter
+import coil.compose.rememberAsyncImagePainter
 import coil.request.SuccessResult
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
@@ -92,6 +115,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlin.math.min
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -102,6 +126,7 @@ private val TablePaper = Color.White
 private val TableInk = Color(0xFF373A35)
 
 /** A single gallery surface. Selection never opens the legacy detail route. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun FilmReviewScreen(
     gallery: Gallery,
@@ -120,6 +145,7 @@ internal fun FilmReviewScreen(
     onWarmThumbnails: (Int, Int) -> Unit,
     onPauseThumbnails: () -> Unit,
     onContentReady: () -> Unit,
+    isEntranceComplete: () -> Boolean,
 ) {
     val context = LocalContext.current
     val tutorialPrefs = remember(context) { context.getSharedPreferences("punctum_tutorial", Context.MODE_PRIVATE) }
@@ -134,11 +160,26 @@ internal fun FilmReviewScreen(
         val window = activity?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, view) }
         val previousLightNavigation = controller?.isAppearanceLightNavigationBars
+        val previousBehavior = controller?.systemBarsBehavior
+        val statusBarsWereVisible = ViewCompat.getRootWindowInsets(view)
+            ?.isVisible(WindowInsetsCompat.Type.statusBars()) ?: true
+        val previousCutoutMode = if (Build.VERSION.SDK_INT >= 28) window?.attributes?.layoutInDisplayCutoutMode else null
         val previousContrast = if (Build.VERSION.SDK_INT >= 29) window?.isNavigationBarContrastEnforced else null
         controller?.isAppearanceLightNavigationBars = true
+        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller?.hide(WindowInsetsCompat.Type.statusBars())
+        if (Build.VERSION.SDK_INT >= 28) window?.attributes = window?.attributes?.apply {
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
         if (Build.VERSION.SDK_INT >= 29) window?.isNavigationBarContrastEnforced = false
         onDispose {
+            if (statusBarsWereVisible) controller?.show(WindowInsetsCompat.Type.statusBars())
+            else controller?.hide(WindowInsetsCompat.Type.statusBars())
+            if (previousBehavior != null) controller?.systemBarsBehavior = previousBehavior
             if (previousLightNavigation != null) controller?.isAppearanceLightNavigationBars = previousLightNavigation
+            if (Build.VERSION.SDK_INT >= 28 && previousCutoutMode != null) window?.attributes = window?.attributes?.apply {
+                layoutInDisplayCutoutMode = previousCutoutMode
+            }
             if (Build.VERSION.SDK_INT >= 29 && previousContrast != null) window?.isNavigationBarContrastEnforced = previousContrast
         }
     }
@@ -170,6 +211,37 @@ internal fun FilmReviewScreen(
     var readyIDs by remember { mutableStateOf(emptySet<String>()) }
     val firstPageIDs = visible.take(FILM_PAGE_SIZE).map { it.uri.toString() }.toSet()
     val ready by rememberUpdatedState(onContentReady)
+    val entranceComplete by rememberUpdatedState(isEntranceComplete)
+    val lampTimeline = remember(context) {
+        val data = context.resources.openRawResource(R.raw.film_lamp_reference)
+            .bufferedReader().use { JSONArray(it.readText()) }
+        FilmLampTimeline(List(data.length()) { index ->
+            val row = data.getJSONObject(index)
+            fun values(name: String): List<Float> = row.getJSONArray(name).let { a ->
+                List(3) { a.getDouble(it).toFloat() }
+            }
+            FilmLampReference(values("table"), values("gain"), values("bias"), values("border"))
+        })
+    }
+    val film120Art = remember(context) {
+        Film120Art(BitmapFactory.decodeResource(context.resources, R.drawable.film120_frame),
+            BitmapFactory.decodeResource(context.resources, R.drawable.film120_digits))
+    }
+    var lampOn by remember(gallery.uri) { mutableStateOf(false) }
+    val lampTime = remember(gallery.uri) { Animatable(0f) }
+    val lamp = remember(lampTimeline, lampTime) { derivedStateOf { lampTimeline.frameAt(lampTime.value) } }
+    LaunchedEffect(gallery.uri, lampOn) {
+        if (!lampOn) {
+            lampTime.snapTo(0f)
+        } else if (!ValueAnimator.areAnimatorsEnabled()) {
+            lampTime.snapTo(FilmLampTimeline.DURATION_MILLIS.toFloat())
+        } else {
+            // A deliberate physical switch starts at ignition, with no automatic dark countdown.
+            lampTime.snapTo(FilmLampTimeline.MANUAL_ON_START_MILLIS.toFloat())
+            lampTime.animateTo(FilmLampTimeline.DURATION_MILLIS.toFloat(),
+                tween(FilmLampTimeline.MANUAL_ON_DURATION_MILLIS, easing = LinearEasing))
+        }
+    }
 
     LaunchedEffect(loading, firstPageIDs, readyIDs) {
         if (!loading && (firstPageIDs.isEmpty() || readyIDs.containsAll(firstPageIDs))) ready()
@@ -237,19 +309,25 @@ internal fun FilmReviewScreen(
 
     ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF090A09))) {
-            val statusInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-            // Keep the table at its established position while returning the header's space to the projection.
+            val statusInset = WindowInsets.statusBarsIgnoringVisibility.asPaddingValues().calculateTopPadding()
+            // Transfer the removed 44dp footer to the projection without shrinking the six slide cells.
             val previousChrome = statusInset + 44.dp
-            val projectionHeight = previousChrome + (maxHeight - previousChrome) * .49f
+            val projectionHeight = previousChrome + (maxHeight - previousChrome) * .49f + 44.dp
             Column(Modifier.fillMaxSize()) {
                 ProjectionScreen(
                     targetPhoto = selected,
                     photos = photos,
                     infoVisible = infoVisible,
-                    minimumMargin = maxOf(24.dp, statusInset + 4.dp),
+                    minimumMargin = 48.dp,
                     showUsageHint = showUsageHint,
                     reveal = reveal.asState(),
-                    modifier = Modifier.fillMaxWidth().height(projectionHeight),
+                    modifier = Modifier.fillMaxWidth().height(projectionHeight).drawWithContent {
+                        drawContent()
+                        val wash = lamp.value.wash * .08f
+                        if (wash > 0f) drawRect(Brush.verticalGradient(
+                            listOf(Color.Transparent, Color.White.copy(alpha = wash)),
+                            startY = size.height - 40.dp.toPx(), endY = size.height))
+                    },
                     gesturesEnabled = !loading && !sorting && !deleting,
                     onGesture = { gesture ->
                         when (gesture) {
@@ -282,9 +360,10 @@ internal fun FilmReviewScreen(
                 )
                 Column(
                     Modifier.fillMaxWidth().weight(1f)
-                        .shadow(16.dp, ambientColor = Color.White, spotColor = Color.White)
-                        .background(TablePaper)
-                        .border(1.dp, Color.White.copy(alpha = .5f))
+                        .drawBehind {
+                            val rgb = lamp.value.table
+                            drawRect(Color(rgb[0] / 255f, rgb[1] / 255f, rgb[2] / 255f))
+                        }
                         // Paint the light table behind system navigation; inset its controls only.
                         .navigationBarsPadding(),
                 ) {
@@ -295,38 +374,32 @@ internal fun FilmReviewScreen(
                     val detailInk = rememberFilmTextInk(detailText, R.font.noto_serif_sc_regular, 10.sp)
                     val titleHeight = with(LocalDensity.current) { titleInk.height.toDp() }
                     val detailHeight = with(LocalDensity.current) { detailInk.height.toDp() }
-                    val headerHeight = maxOf(88.dp, 40.dp + titleHeight + detailHeight)
+                    val headerHeight = maxOf(72.dp, 28.dp + titleHeight + detailHeight)
                     Box(Modifier.fillMaxWidth().height(headerHeight).padding(horizontal = 12.dp)) {
-                        Column(Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 48.dp),
+                        Column(Modifier.align(Alignment.Center).fillMaxWidth().filmLampSurface(lamp).padding(horizontal = 48.dp),
                             horizontalAlignment = Alignment.CenterHorizontally) {
                             FilmInkText(gallery.displayName, titleInk, titleFont, 18.sp, FontWeight.SemiBold, TableInk,
                                 Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(6.dp))
                             FilmInkText(detailText, detailInk, NotoSerifSc, 10.sp, FontWeight.Normal, TableInk.copy(alpha = .65f),
                                 Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                         }
                         IconButton(onClick = onExit, enabled = !deleting,
-                            modifier = Modifier.align(Alignment.CenterStart).size(44.dp).offset(y = -(8.dp + detailHeight) / 2)) {
+                            modifier = Modifier.align(Alignment.CenterStart).size(44.dp).filmLampSurface(lamp).offset(y = -(6.dp + detailHeight) / 2)) {
                             Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回首页", tint = TableInk, modifier = Modifier.size(20.dp))
                         }
-                        Box(Modifier.align(Alignment.CenterEnd).offset(y = -(8.dp + detailHeight) / 2)) {
-                            IconButton(onClick = { menuExpanded = true }, enabled = !deleting, modifier = Modifier.size(44.dp)) {
-                                Icon(Icons.Outlined.MoreHoriz, "图集更多操作", tint = TableInk, modifier = Modifier.size(21.dp))
-                            }
-                            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false },
-                                containerColor = TablePaper, tonalElevation = 0.dp) {
-                                DropdownMenuItem(text = { Text("重命名图集", color = TableInk, fontFamily = NotoSerifSc, fontSize = 13.sp) },
-                                    leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = TableInk, modifier = Modifier.size(18.dp)) },
-                                    onClick = { menuExpanded = false; onRename(gallery) })
-                                DropdownMenuItem(text = { Text("排序 · ${gallery.sortOrder.label}", color = TableInk, fontFamily = NotoSerifSc, fontSize = 13.sp) },
-                                    leadingIcon = { Icon(Icons.Outlined.Sort, null, tint = TableInk, modifier = Modifier.size(18.dp)) },
-                                    enabled = !loading && !sorting,
-                                    onClick = onToggleSort)
-                            }
-                        }
+                        FilmLampSwitch(
+                            checked = lampOn,
+                            enabled = !loading && !deleting && entranceComplete(),
+                            onCheckedChange = {
+                                lampOn = it
+                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            },
+                            modifier = Modifier.align(Alignment.CenterEnd).offset(y = -(6.dp + detailHeight) / 2),
+                        )
                     }
                     if (loading || deleting || sorting) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = TableInk)
-                    Box(Modifier.fillMaxWidth().weight(1f)) {
+                    Box(Modifier.fillMaxWidth().weight(1f).padding(bottom = 20.dp)) {
                         if (visible.isEmpty()) {
                             Text(if (queuedIDs.isEmpty()) "这个图集还没有照片" else "已选好待删除项目，返回首页时确认",
                                 modifier = Modifier.align(Alignment.Center).padding(20.dp), color = TableInk, fontSize = 12.sp)
@@ -337,7 +410,7 @@ internal fun FilmReviewScreen(
                             flingBehavior = PagerDefaults.flingBehavior(state = pager),
                             beyondViewportPageCount = 1,
                         ) { page ->
-                            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 repeat(2) { row ->
                                     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                         repeat(3) { col ->
@@ -345,6 +418,8 @@ internal fun FilmReviewScreen(
                                             Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
                                                 if (photo != null) FilmSlide(
                                                     photo = photo,
+                                                    lamp = lamp,
+                                                    art = film120Art,
                                                     number = photos.indexOfFirst { it.uri == photo.uri } + 1,
                                                     selected = photo.uri.toString() == selectedID,
                                                     enabled = !pager.isScrollInProgress && !sorting && !deleting,
@@ -359,22 +434,26 @@ internal fun FilmReviewScreen(
                             }
                         }
                     }
-                    Row(Modifier.fillMaxWidth().height(44.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("LIGHT TABLE", color = TableInk.copy(alpha = .6f), fontFamily = DetailSerif, fontSize = 8.sp, letterSpacing = 2.sp)
-                        if (queuedIDs.isNotEmpty()) Text("  待删除 ${queuedIDs.size}", color = TableInk, fontSize = 9.sp)
-                        Spacer(Modifier.weight(1f))
-                        Text("${if (visible.isEmpty()) 0 else pager.currentPage + 1} / ${if (visible.isEmpty()) 0 else pages}",
-                            color = TableInk, fontSize = 10.sp, fontFamily = DetailSerif)
-                        if (showUsageHint) Text("   横滑换页", color = TableInk.copy(alpha = .55f), fontSize = 9.sp)
-                        Spacer(Modifier.width(6.dp))
-                        IconToggleButton(checked = infoVisible, onCheckedChange = { infoVisible = it },
-                            modifier = Modifier.size(40.dp),
-                            colors = IconButtonDefaults.iconToggleButtonColors(contentColor = TableInk, checkedContentColor = Color(0xFF9A7A36))) {
-                            Icon(Icons.Outlined.Info, if (infoVisible) "关闭影像参数" else "显示影像参数", modifier = Modifier.size(19.dp))
-                        }
-                    }
                 }
             }
+                        Box(Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 20.dp)) {
+                            IconButton(onClick = { menuExpanded = true }, enabled = !deleting, modifier = Modifier.size(44.dp)) {
+                                Icon(Icons.Outlined.MoreHoriz, "图集更多操作", tint = Bone.copy(alpha = .72f), modifier = Modifier.size(21.dp))
+                            }
+                            DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false },
+                                containerColor = TablePaper, tonalElevation = 0.dp) {
+                                DropdownMenuItem(text = { Text("重命名图集", color = TableInk, fontFamily = NotoSerifSc, fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = TableInk, modifier = Modifier.size(18.dp)) },
+                                    onClick = { menuExpanded = false; onRename(gallery) })
+                                DropdownMenuItem(text = { Text("排序 · ${gallery.sortOrder.label}", color = TableInk, fontFamily = NotoSerifSc, fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Outlined.Sort, null, tint = TableInk, modifier = Modifier.size(18.dp)) },
+                                    enabled = !loading && !sorting,
+                                    onClick = onToggleSort)
+                                DropdownMenuItem(text = { Text(if (infoVisible) "关闭影像参数" else "显示影像参数", color = TableInk, fontFamily = NotoSerifSc, fontSize = 13.sp) },
+                                    leadingIcon = { Icon(Icons.Outlined.Info, null, tint = TableInk, modifier = Modifier.size(18.dp)) },
+                                    onClick = { infoVisible = !infoVisible; menuExpanded = false })
+                            }
+                        }
         }
     }
 }
@@ -628,8 +707,7 @@ private fun ProjectionScreen(
 }
 
 @Composable
-private fun FilmSlide(photo: Photo, number: Int, selected: Boolean, enabled: Boolean, onSelect: () -> Unit, onDelete: () -> Unit, onReady: () -> Unit) {
-    val context = LocalContext.current
+private fun FilmSlide(photo: Photo, lamp: State<FilmLampFrame>, art: Film120Art, number: Int, selected: Boolean, enabled: Boolean, onSelect: () -> Unit, onDelete: () -> Unit, onReady: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val deleteProgress = remember(photo.uri) { Animatable(0f) }
     var showDeleteProgress by remember(photo.uri) { mutableStateOf(false) }
@@ -640,13 +718,13 @@ private fun FilmSlide(photo: Photo, number: Int, selected: Boolean, enabled: Boo
     }
     val tilt = remember(photo.uri) { ((photo.uri.hashCode().and(0x7fffffff) % 9) - 4) * .32f }
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        val edge = min(maxWidth.value - 4f, maxHeight.value - 5f).coerceAtLeast(20f).dp
+        val dimensions = Film120Geometry.size(maxWidth.value, maxHeight.value)
+        val frameWidth = dimensions.width.dp
+        val frameHeight = dimensions.height.dp
+        val scale = dimensions.width / Film120Geometry.WIDTH
         Box(
-            Modifier.size(edge).graphicsLayer { rotationZ = tilt }
-                .shadow(if (selected) 6.dp else 3.dp, RoundedCornerShape(2.dp))
-                .clip(RoundedCornerShape(2.dp))
-                .background(Brush.linearGradient(listOf(Color.White, Color(0xFFE9EBE8), Color.White)))
-                .border(if (selected) 1.5.dp else .5.dp, if (selected) Color(0xFF9A7A36) else Color.White, RoundedCornerShape(2.dp))
+            Modifier.size(frameWidth, frameHeight).graphicsLayer { rotationZ = tilt }
+                .shadow(if (selected) 4.dp else 2.dp, RoundedCornerShape(.5.dp))
                 .pointerInput(photo.uri, enabled) {
                     if (!enabled) return@pointerInput
                     detectTapGestures(onPress = {
@@ -683,28 +761,16 @@ private fun FilmSlide(photo: Photo, number: Int, selected: Boolean, enabled: Boo
                     }
                 },
         ) {
-            Column(Modifier.fillMaxSize().padding(5.dp)) {
-                Row(Modifier.fillMaxWidth().height(11.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("PUNCTUM", color = TableInk, fontFamily = DetailSerif, fontSize = 5.sp, lineHeight = 7.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
-                    Spacer(Modifier.weight(1f))
-                    Text(number.toString().padStart(2, '0'), color = TableInk, fontSize = 6.sp, lineHeight = 8.sp, fontFamily = DetailSerif)
-                }
-                Box(Modifier.fillMaxWidth().weight(1f).background(Color(0xFF252C26)), contentAlignment = Alignment.Center) {
-                    PunctumImage(
-                        model = remember(photo.uri, photo.thumbnailPath) { ImageRequest.Builder(context).data(PhotoStill.forList(photo)).crossfade(false).build() },
-                        contentDescription = null, contentScale = ContentScale.Fit, animateOnLoad = false,
-                        onSuccess = onReady, onError = onReady,
-                        modifier = Modifier.fillMaxSize().padding(2.dp),
-                    )
-                    Canvas(Modifier.matchParentSize()) {
-                        val radius = 1.2.dp.toPx()
-                        val inset = 2.dp.toPx()
-                        listOf(Offset(inset, inset), Offset(size.width - inset, inset), Offset(inset, size.height - inset), Offset(size.width - inset, size.height - inset))
-                            .forEach { drawCircle(Color(0xFFB7B8A8), radius, it) }
-                    }
-                }
-                Text("REVERSAL  /  $number", color = TableInk.copy(alpha = .6f), fontFamily = DetailSerif, fontSize = 4.sp, lineHeight = 6.sp,
-                    letterSpacing = .6.sp, modifier = Modifier.padding(top = 3.dp))
+            // The bitmap is source-cropped to a square before drawing, without a rotated scissor.
+            Box(Modifier.offset(x = (Film120Geometry.PHOTO_LEFT * scale).dp,
+                y = (Film120Geometry.PHOTO_TOP * scale).dp)
+                .size((Film120Geometry.PHOTO_SIDE * scale).dp)) {
+                FilmThumbnail(photo, lamp, Modifier.fillMaxSize(), onReady)
+            }
+            Film120Border(art, lamp, number, remember(photo.uri) { Film120Geometry.emulsionCode(photo.uri.toString()) },
+                Modifier.matchParentSize())
+            if (selected) Canvas(Modifier.matchParentSize()) {
+                drawRect(Color(0xFFE78B4D).copy(alpha = .85f), style = Stroke(.65.dp.toPx()))
             }
             if (showDeleteProgress) {
                 Box(Modifier.align(Alignment.TopEnd).padding(3.dp)) {
@@ -712,5 +778,179 @@ private fun FilmSlide(photo: Photo, number: Int, selected: Boolean, enabled: Boo
                 }
             }
         }
+    }
+}
+
+/** Source-crop the bitmap so a rotated aperture never needs a jagged hardware scissor. */
+@Composable
+private fun FilmThumbnail(photo: Photo, lamp: State<FilmLampFrame>, modifier: Modifier, onReady: () -> Unit) {
+    val context = LocalContext.current
+    val ready by rememberUpdatedState(onReady)
+    BoxWithConstraints(modifier) {
+        val density = LocalDensity.current
+        val widthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
+        val heightPx = with(density) { maxHeight.roundToPx() }.coerceAtLeast(1)
+        val request = remember(photo.uri, photo.thumbnailPath, widthPx, heightPx) {
+            ImageRequest.Builder(context).data(PhotoStill.forList(photo))
+                .size(widthPx, heightPx).scale(coil.size.Scale.FILL).crossfade(false).build()
+        }
+        val painter = rememberAsyncImagePainter(request)
+        val state = painter.state
+        LaunchedEffect(state) {
+            if (state is AsyncImagePainter.State.Success || state is AsyncImagePainter.State.Error) ready()
+        }
+        val bitmap = remember(state) { (state as? AsyncImagePainter.State.Success)?.result?.drawable?.toBitmap() }
+        val source = remember(bitmap) {
+            bitmap?.let {
+                val crop = Film120Geometry.crop(it.width, it.height)
+                Rect(crop.left, crop.top, crop.left + crop.side, crop.top + crop.side)
+            }
+        }
+        val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG) }
+        val lampFilter = remember { FilmLampFilter() }
+        val destination = remember { android.graphics.RectF() }
+        Canvas(Modifier.fillMaxSize()) {
+            if (bitmap != null && source != null) {
+                // Read shared light state only while drawing; preserve source cropping and antialiasing.
+                val frame = lamp.value
+                paint.alpha = 255
+                paint.colorFilter = lampFilter.forFrame(frame, photograph = true)
+                destination.set(0f, 0f, size.width, size.height)
+                drawIntoCanvas {
+                    it.nativeCanvas.drawBitmap(bitmap, source, destination, paint)
+                    // Retain a little source detail above the clipping threshold, then restore full color.
+                    if (frame.originalMix > 0f && frame.originalMix < 1f) {
+                        paint.colorFilter = null
+                        paint.alpha = (frame.originalMix * 255f).roundToInt()
+                        it.nativeCanvas.drawBitmap(bitmap, source, destination, paint)
+                    }
+                }
+            } else drawRect(Color(0xFF252C26))
+        }
+    }
+}
+
+/** Only the frame, labels and header receive the table exposure; photographs have their own curve. */
+@Composable
+private fun Modifier.filmLampSurface(lamp: State<FilmLampFrame>): Modifier {
+    val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
+    val filter = remember { FilmLampFilter() }
+    return drawWithContent {
+        paint.colorFilter = filter.forFrame(lamp.value, photograph = false)
+        val canvas = drawContext.canvas.nativeCanvas
+        val checkpoint = canvas.saveLayer(0f, 0f, size.width, size.height, paint)
+        try { drawContent() } finally { canvas.restoreToCount(checkpoint) }
+    }
+}
+
+/** Reuse filters for the same immutable reference frame across draw calls. */
+private class FilmLampFilter {
+    private var previous: FilmLampFrame? = null
+    private var filter: ColorMatrixColorFilter? = null
+
+    fun forFrame(frame: FilmLampFrame, photograph: Boolean): ColorMatrixColorFilter? {
+        if (frame !== previous) {
+            previous = frame
+            if (photograph && frame.filmGain == 1f && frame.filmBias == 0f) {
+                filter = null
+            } else {
+                val matrix = FloatArray(20)
+                for (channel in 0..2) {
+                    matrix[channel * 6] = if (photograph) frame.filmGain else frame.boardGain(channel)
+                    matrix[channel * 5 + 4] = if (photograph) frame.filmBias else frame.boardBias(channel)
+                }
+                matrix[18] = 1f
+                filter = ColorMatrixColorFilter(ColorMatrix(matrix))
+            }
+        }
+        return filter
+    }
+}
+
+
+@Composable
+private fun FilmLampSwitch(checked: Boolean, enabled: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val interaction = remember { MutableInteractionSource() }
+    Canvas(modifier.size(48.dp).toggleable(value = checked, enabled = enabled, role = Role.Switch,
+        interactionSource = interaction, indication = null, onValueChange = onCheckedChange).semantics {
+            contentDescription = "看片台灯光开关"
+            stateDescription = if (checked) "已开灯" else "已关灯"
+        }) {
+        val unit = size.width / 48f
+        val left = 7f * unit
+        val top = 15f * unit
+        val width = 34f * unit
+        val height = 18f * unit
+        drawRoundRect(Color.Black.copy(alpha = .22f), Offset(left, top + unit), Size(width, height), CornerRadius(3f * unit))
+        drawRoundRect(Brush.verticalGradient(listOf(Color(0xFF55584F), Color(0xFF252923)), startY = top, endY = top + height),
+            Offset(left, top), Size(width, height), CornerRadius(3f * unit))
+        drawRoundRect(Color(0xFF6C6E64), Offset(left, top), Size(width, height), CornerRadius(3f * unit), style = Stroke(.5f * unit))
+        drawRoundRect(Brush.verticalGradient(listOf(Color(0xFF252923), Color(0xFF383D34)), startY = top, endY = top + height),
+            Offset(left + 2f * unit, top + 2f * unit), Size(width - 4f * unit, height - 4f * unit), CornerRadius(2f * unit))
+        val thumbWidth = 14f * unit
+        val thumbLeft = if (checked) left + width - thumbWidth - 2f * unit else left + 2f * unit
+        val thumbTop = top + 2f * unit
+        drawRoundRect(Color.Black.copy(alpha = .3f), Offset(thumbLeft, thumbTop + unit), Size(thumbWidth, 14f * unit), CornerRadius(2f * unit))
+        drawRoundRect(Brush.verticalGradient(listOf(Color(0xFFEEEADE), Color(0xFFC8C6B9)), startY = thumbTop, endY = thumbTop + 14f * unit),
+            Offset(thumbLeft, thumbTop), Size(thumbWidth, 14f * unit), CornerRadius(2f * unit))
+        drawRoundRect(Color(0xFFA6A598), Offset(thumbLeft, thumbTop), Size(thumbWidth, 14f * unit), CornerRadius(2f * unit), style = Stroke(.5f * unit))
+        for (line in listOf(5.5f, 8.5f)) {
+            val x = thumbLeft + line * unit
+            drawLine(Color(0xFF8B8C7E), Offset(x, thumbTop + 4f * unit), Offset(x, thumbTop + 10f * unit), .65f * unit)
+            drawLine(Color(0xFFF5F1E5), Offset(x + .7f * unit, thumbTop + 4f * unit), Offset(x + .7f * unit, thumbTop + 10f * unit), .45f * unit)
+        }
+    }
+}
+
+
+private data class Film120Art(val frame: Bitmap, val digits: Bitmap)
+
+/** Reference border texture and original triangles, plus user-specified live film numbers. */
+@Composable
+private fun Film120Border(art: Film120Art, lamp: State<FilmLampFrame>, number: Int, code: String, modifier: Modifier) {
+    val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG) }
+    val destination = remember { android.graphics.RectF() }
+    val digitSource = remember { Rect() }
+    val filter = remember { Film120BorderFilter() }
+    Canvas(modifier) {
+        val scale = size.width / Film120Geometry.WIDTH
+        paint.colorFilter = filter.forFrame(lamp.value)
+        destination.set(0f, 0f, size.width, size.height)
+        drawIntoCanvas { canvas ->
+            canvas.nativeCanvas.drawBitmap(art.frame, null, destination, paint)
+            fun printNumber(text: String, left: Float, top: Float) {
+                text.forEachIndexed { index, ch ->
+                    val digit = ch.digitToInt()
+                    val glyphWidth = Film120Geometry.DIGIT_WIDTH
+                    digitSource.set((digit * glyphWidth).toInt(), 0, ((digit + 1) * glyphWidth).toInt(), Film120Geometry.DIGIT_HEIGHT.toInt())
+                    val x = (left + index * glyphWidth) * scale
+                    destination.set(x, top * scale, x + glyphWidth * scale, (top + Film120Geometry.DIGIT_HEIGHT) * scale)
+                    canvas.nativeCanvas.drawBitmap(art.digits, digitSource, destination, paint)
+                }
+            }
+            printNumber(code, Film120Geometry.RANDOM_LEFT, 0f)
+            printNumber(number.toString(), Film120Geometry.NUMBER_LEFT, Film120Geometry.NUMBER_TOP)
+        }
+    }
+}
+
+/** The opaque black base transmits much less of the lamp than the photographic emulsion. */
+private class Film120BorderFilter {
+    private var previous: FilmLampFrame? = null
+    private var filter: ColorMatrixColorFilter? = null
+    fun forFrame(frame: FilmLampFrame): ColorMatrixColorFilter? {
+        if (previous !== frame) {
+            previous = frame
+            filter = if (frame.borderGain == 1f && frame.borderLift.all { it == 0f }) null else {
+                val matrix = FloatArray(20)
+                for (channel in 0..2) {
+                    matrix[channel * 6] = frame.borderGain
+                    matrix[channel * 5 + 4] = frame.borderLift[channel]
+                }
+                matrix[18] = 1f
+                ColorMatrixColorFilter(ColorMatrix(matrix))
+            }
+        }
+        return filter
     }
 }

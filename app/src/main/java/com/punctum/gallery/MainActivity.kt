@@ -455,6 +455,10 @@ private fun PunctumApp(vm: GalleryViewModel) {
                             onWarmThumbnails = vm::warmGalleryThumbnails,
                             onPauseThumbnails = vm::pauseGalleryThumbnails,
                             onContentReady = { if (vm.currentUri == currentKey) readyGalleryKey = currentKey },
+                            isEntranceComplete = {
+                                readyGalleryKey == currentKey && !galleryExitInProgress &&
+                                    (!layeredHomeGalleryMotion || galleryTransitionProgress.value >= 1f)
+                            },
                         )
                     } else {
                     val listState = rememberLazyListState()

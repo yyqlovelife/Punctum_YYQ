@@ -22,6 +22,15 @@ class FilmReviewLayoutTest {
         assertEquals(FILM_INFO_SIDE_MARGIN, (360f - landscape.size.width) / 2f, .001f)
     }
 
+    @Test fun portraitLeavesClearSpaceBelowTheRaisedMoreButton() {
+        for (height in listOf(431f, 466f, 500f)) {
+            val portrait = filmProjectionFrame(3f / 4f, 360f, height, false, 48f)
+            assertTrue(portrait.top >= 48f)
+            // Menu touch target is y=4..48dp, the 21dp glyph is y=15.5..36.5dp.
+            assertTrue(portrait.top - 36.5f >= 11.5f)
+        }
+    }
+
     @Test fun landscapeStaysInPlaceWhenInformationAlreadyFits() {
         val rest = filmProjectionFrame(4f / 3, 360f, 431f, false, 44f)
         val info = filmProjectionFrame(4f / 3, 360f, 431f, true, 44f)
