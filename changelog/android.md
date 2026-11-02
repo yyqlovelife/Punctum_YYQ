@@ -6,6 +6,8 @@
 
 诺贝尔PJW110与用户PMA110均已保留数据安装/90并正常启动；详细视觉与刷新验证在各轮记录中，PMA110本轮仅核对安装/启动。Release、Lint（0错误/17既有警告）、60项Release单测和签名通过。最新包 `APK/Punctum-0.7.0-90.apk`；`APK/Punctum-0.7.0-release.apk`同内容，旧/77归档为`APK/Punctum-0.7.0-77.apk`。APK与私有真机素材不进GitHub，本轮不更新Google Drive；云端仍为/88。iOS保持0.5.10/60。
 
+GitHub main已同步源码提交[5776b52](https://github.com/yyqlovelife/Punctum_YYQ/commit/5776b52e516d05a786b4a21e922fbc4fee0ae4da)，236文件完整树一致；后续文档提交补入发布核验结果。
+
 最新接续以[11月2日交接](../SESSION_HANDOFF_2026-11-02.md)及[本次发布记录](../docs/RELEASE_VALIDATION_2026-11-02.md)为准。下方旧版本、旧文案、未同步状态均为对应日期的历史。
 
 ## 0.7.0 正式锁版 · 2026-10-30 · Android 0.7.0/77

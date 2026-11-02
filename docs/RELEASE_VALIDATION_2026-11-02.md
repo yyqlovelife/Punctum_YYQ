@@ -32,4 +32,8 @@ GitHub只保存源码/资源/测试/配置/文档。APK/IPA、签名、本机配
 
 ## GitHub核验
 
-目标：`yyqlovelife/Punctum_YYQ/main`。发布前远端与本地基线均为`21673dadc91fd5f4653a82c9a0be230323f7cc1e`。提交及远端完整树核验完成后，结果将记录于此。
+目标：`yyqlovelife/Punctum_YYQ/main`。发布前远端与本地基线均为`21673dadc91fd5f4653a82c9a0be230323f7cc1e`。常规git push遇到curl55连接中断，使用已认证Git Data API上传43个变更文件并非强制更新main；没有移动原锁版标签。
+
+源码发布提交：[5776b52](https://github.com/yyqlovelife/Punctum_YYQ/commit/5776b52e516d05a786b4a21e922fbc4fee0ae4da)，tree `57a7d5d818592486d82cb3055ed99cf8efda814b`。独立重读main引用及递归文件树（未截断），**236个文件**的路径、类型、模式、blob SHA全部与本地Git树一致，包括新增纸纹PNG及四份字体资源。未将APK/IPA、签名、本机配置和私有验证素材纳入仓库。
+
+本节结果通过后续文档提交补入，main最终包含源码提交及发布核验记录；最终提交后再次完整比对远端树。源码与0.7.0/90 APK保持一致，文档补充不改变应用版本或构建产物。

@@ -8,6 +8,10 @@
 
 真实源码：`/Users/80400763/Documents/Punctum`。`/Users/80400763/Documents/ChatGPT/Punctum-OPPO`仅为辅助交接目录。保留既有改动，不用L3 Workflow，不reset/clean，不主动改UI。GitHub为`yyqlovelife/Punctum_YYQ/main`，实时状态及源码提交见[发布记录](docs/RELEASE_VALIDATION_2026-11-02.md)。原`android-v0.7.0`标签保留指向/77，不能将标签直接当/90。重新打包亦保持0.7.0/90。
 
+## GitHub已核验状态
+
+源码提交[5776b52](https://github.com/yyqlovelife/Punctum_YYQ/commit/5776b52e516d05a786b4a21e922fbc4fee0ae4da)已进入main，递归完整树236文件的路径/类型/模式/blob SHA与本地逐项一致，tree `57a7d5d818592486d82cb3055ed99cf8efda814b`；发布结果随后以文档补充提交纳入main。APK与私有素材未入库，原/77标签未移动。后续核对以实时main为准。
+
 ## 当前视觉与交互
 
 - 胶片首页由最新四张照片组成一卷120胶片；不足四张留空。FilmStripHomeEnabled开启，旧ReversalFilmGrid完整保留回退。

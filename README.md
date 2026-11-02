@@ -22,6 +22,8 @@ Punctum 直接映射设备里的系统图集，照片仍由系统相册管理。
 
 本轮重新打包与GitHub同步，版本号和构建号均不增加。当前包为`APK/Punctum-0.7.0-90.apk`，正式别名`APK/Punctum-0.7.0-release.apk`内容一致；此前/77锁版归档为`APK/Punctum-0.7.0-77.apk`，原标签`android-v0.7.0`保留。最新接续见[11月2日交接](SESSION_HANDOFF_2026-11-02.md)，构建及远端核验见[发布记录](docs/RELEASE_VALIDATION_2026-11-02.md)。
 
+GitHub `main`已同步本轮源码、资源和文档，源码提交[5776b52](https://github.com/yyqlovelife/Punctum_YYQ/commit/5776b52e516d05a786b4a21e922fbc4fee0ae4da)；完整236文件树核对一致，后续文档提交补入发布核验记录。原`android-v0.7.0`标签仍保留/77。
+
 ## 四张照片组成一卷首页
 
 每个图集按拍摄时间倒序取最新四张，拼成通栏120胶片，下面为原始纸纹片签。英文沿用内置Averia Serif Libre、中文沿用思源宋体，标题黑色、时间与数量为灰色。数量文案统一为`Stories Behind xx Photographs`；明信片和票根的数量文字跟随各自英文标题字体。
