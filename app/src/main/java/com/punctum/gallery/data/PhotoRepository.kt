@@ -241,6 +241,7 @@ object PhotoRepository {
         context: Context,
         gallery: Gallery,
         cachedPhotos: List<Photo> = emptyList(),
+        includeLegacyCovers: Boolean = true,
     ): GalleryOverview =
         withContext(Dispatchers.IO) {
             val files = scanFiles(context, gallery.uri)
@@ -258,16 +259,17 @@ object PhotoRepository {
             )
             val times = datedFiles.map { it.second }.sorted()
             val covers = datedFiles.take(COVER_COUNT).map { it.first.uri }
-            val coverPaths = GalleryImageCache.buildCovers(context, gallery.uri.toString(), covers)
+            val coverPaths = if (includeLegacyCovers) GalleryImageCache.buildCovers(context, gallery.uri.toString(), covers) else null
             GalleryOverview(
                 gallery = gallery,
                 count = files.size,
                 timeSpan = formatSpan(times),
                 coverUris = covers,
-                postcardCoverPath = coverPaths.postcardPath,
-                ticketCoverPath = coverPaths.ticketPath,
-                ticketDominantColorArgb = coverPaths.ticketDominantColorArgb,
-                ticketColorVersion = coverPaths.ticketColorVersion,
+                coverRevisions = datedFiles.take(COVER_COUNT).map { "${it.first.modifiedMillis}:${it.first.sizeBytes}" },
+                postcardCoverPath = coverPaths?.postcardPath,
+                ticketCoverPath = coverPaths?.ticketPath,
+                ticketDominantColorArgb = coverPaths?.ticketDominantColorArgb,
+                ticketColorVersion = coverPaths?.ticketColorVersion ?: 0,
                 loading = false,
             )
         }
@@ -289,6 +291,7 @@ object PhotoRepository {
             count = photos.size,
             timeSpan = span,
             coverUris = covers,
+            coverRevisions = newestFirst.take(COVER_COUNT).map { "${it.modifiedMillis}:${it.fileSizeBytes}" },
             loading = false,
         )
     }
@@ -557,6 +560,11 @@ object PhotoRepository {
         }
     }
 
+    // Bounded cache including negative EXIF results. A changed file gets a new identity.
+    // Home polling no longer opens every original again when a gallery has not been visited.
+    private data class OverviewCaptureTime(val originalMillis: Long?)
+    private val overviewCaptureTimes = android.util.LruCache<String, OverviewCaptureTime>(8192)
+
     private suspend fun sortFilesByCaptureTime(
         context: Context,
         files: List<PhotoFile>,
@@ -576,10 +584,18 @@ object PhotoRepository {
                             cachedMatchesFile(it, file) &&
                                 it.metadataVersion >= METADATA_VERSION
                         }
-                    val exifMillis = reusable?.exifTakenMillis
-                        ?: if (reusable == null) exifReadSemaphore.withPermit {
-                            readExifOriginalMillis(context, file.uri)
-                        } else null
+                    val signature = "${file.uri}|${file.sizeBytes}|${file.modifiedMillis}|${file.takenMillis}"
+                    val exifMillis = if (reusable != null) reusable.exifTakenMillis else {
+                        overviewCaptureTimes.get(signature)?.originalMillis ?: run {
+                            // Cache null as well: absence of EXIF is normal for exported pictures.
+                            val entry = overviewCaptureTimes.get(signature) ?: exifReadSemaphore.withPermit {
+                                OverviewCaptureTime(readExifOriginalMillis(context, file.uri)).also {
+                                    overviewCaptureTimes.put(signature, it)
+                                }
+                            }
+                            entry.originalMillis
+                        }
+                    }
                     file to resolveCaptureMillis(
                         file.takenMillis, exifMillis, file.modifiedMillis,
                         reusable?.takenMillis ?: 0L,

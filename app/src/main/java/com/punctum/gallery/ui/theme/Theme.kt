@@ -39,6 +39,18 @@ val DetailSerif = FontFamily(
     Font(R.font.newsreader_semibold, FontWeight.Bold),
 )
 
+/** Bundled OFL font for the film-strip home only; Chinese glyphs use Noto Serif SC. */
+val AveriaSerifLibre = FontFamily(
+    Font(R.font.averia_serif_libre_regular, FontWeight.Normal),
+    Font(R.font.averia_serif_libre_bold, FontWeight.Bold),
+)
+
+/** Open-source display serif used only for recessed film-home labels. */
+val FilmDebossSerif = FontFamily(
+    Font(R.font.bodoni_moda_semibold_text, FontWeight.SemiBold),
+    Font(R.font.bodoni_moda_black_display, FontWeight.Black),
+)
+
 val NotoSerifSc = FontFamily(
     Font(R.font.noto_serif_sc_regular, FontWeight.Normal),
     Font(R.font.noto_serif_sc_medium, FontWeight.Medium),

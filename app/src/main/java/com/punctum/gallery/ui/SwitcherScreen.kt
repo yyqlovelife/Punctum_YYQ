@@ -175,6 +175,7 @@ internal fun SwitcherScreen(
             .background(Ink)
             .windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility),
     ) {
+        // All three modes share the same header, so their first cards start at the same edge.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -477,6 +478,11 @@ private fun ReversalFilmGrid(
     cardVariants: MutableMap<String, Int>,
     onSelect: (String) -> Unit,
 ) {
+    if (FilmStripHomeEnabled) {
+        FilmStripHomeList(overviews, gridState, onSelect)
+        return
+    }
+    // Retained verbatim: disable FilmStripHomeEnabled to restore the original two-column home.
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val baselinePadding = 16.dp
         val baselineGap = 10.dp
@@ -1305,7 +1311,7 @@ private fun PostcardInvitationCard(
                 Column(modifier = Modifier.fillMaxWidth().height(40.dp)) {
                     Text(
                         postcardStoryLine(overview),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = DetailSerif, fontSize = 12.sp, lineHeight = 16.sp),
                         color = textColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -1489,7 +1495,7 @@ private fun TicketInvitationCard(
             )
             Spacer(Modifier.weight(1f))
             TicketInfoBand(
-                story = "关于 ${overview.count} 幅作品的故事",
+                story = "Stories Behind ${overview.count} Photographs",
                 time = compactTimeSpan(overview.timeSpan).ifBlank { "Time unknown" },
                 color = ink,
             )
@@ -1573,7 +1579,7 @@ private fun TicketInfoBand(story: String, time: String, color: Color) {
         Text(
             story,
             style = MaterialTheme.typography.bodyMedium.copy(
-                fontFamily = NotoSerifSc,
+                fontFamily = DetailSerif,
                 fontSize = 7.sp,
                 lineHeight = 8.sp,
                 letterSpacing = 0.sp,
@@ -2153,7 +2159,7 @@ private fun TicketNotch(modifier: Modifier = Modifier) {
     }
 }
 
-private fun postcardStoryLine(overview: GalleryOverview): String = "关于 ${overview.count} 幅作品的故事"
+private fun postcardStoryLine(overview: GalleryOverview): String = "Stories Behind ${overview.count} Photographs"
 
 private fun postcardDateLine(overview: GalleryOverview): String =
     compactTimeSpan(overview.timeSpan).ifBlank { "时间未知" }

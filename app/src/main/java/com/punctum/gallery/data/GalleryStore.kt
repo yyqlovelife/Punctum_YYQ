@@ -71,6 +71,9 @@ class GalleryStore(context: Context) {
                             coverUris = (0 until covers.length()).mapNotNull { i ->
                                 covers.optString(i).takeIf { it.isNotBlank() }?.let(Uri::parse)
                             },
+                            coverRevisions = cached.optJSONArray("coverRevisions")?.let { revisions ->
+                                (0 until revisions.length()).map { revisions.optString(it) }
+                            }.orEmpty(),
                             postcardCoverPath = cached.optString("postcardCoverPath").ifBlank { null },
                             ticketCoverPath = cached.optString("ticketCoverPath").ifBlank { null },
                             ticketDominantColorArgb = cached
@@ -102,6 +105,7 @@ class GalleryStore(context: Context) {
                 put("count", overview.count)
                 put("timeSpan", overview.timeSpan)
                 put("covers", covers)
+                put("coverRevisions", JSONArray(overview.coverRevisions))
                 put("postcardCoverPath", overview.postcardCoverPath)
                 put("ticketCoverPath", overview.ticketCoverPath)
                 overview.ticketDominantColorArgb?.let { put("ticketDominantColorArgb", it) }

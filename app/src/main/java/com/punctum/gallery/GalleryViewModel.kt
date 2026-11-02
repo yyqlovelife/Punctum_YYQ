@@ -37,6 +37,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     private val coverBuildJobs = mutableMapOf<String, Job>()
     private val photoRefreshJobs = mutableMapOf<String, Job>()
     private var overviewRefreshJob: Job? = null
+    private var overviewRefreshPending = false
     private var galleryEntryJob: Job? = null
     private var gallerySortJob: Job? = null
     private var gallerySortGeneration = 0
@@ -301,13 +302,19 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                 if (generation != galleryEntryGeneration || currentUri != uriKey) return@launch
                 // On first entry do a single full scan, avoiding a second EXIF pass
                 // solely to obtain four cover photos before the real list load.
-                val list = if (cached.isNotEmpty() && PhotoRepository.hasCaptureTimeCache(cached)) {
+                val normalizedCache = if (cached.isNotEmpty() && PhotoRepository.hasCaptureTimeCache(cached)) {
                     withContext(Dispatchers.Default) {
                         PhotoRepository.normalizeCachedCaptureTimes(cached)
                     }
-                } else {
-                    PhotoRepository.loadPhotos(getApplication(), gallery.uri, cached)
-                }
+                } else null
+                // Home scans can be newer than the persisted/full-list cache. Do not
+                // enter with that older list or publish its covers over the live home.
+                val homeOverview = overviews[uriKey]?.takeUnless { it.loading }
+                val cachedOverview = normalizedCache?.let { PhotoRepository.overviewFromPhotos(gallery, it) }
+                val reuseCachedPhotos = normalizedCache != null &&
+                    (homeOverview == null || cachedOverview?.hasSamePhotoContent(homeOverview) == true)
+                val list = if (reuseCachedPhotos) requireNotNull(normalizedCache)
+                    else PhotoRepository.loadPhotos(getApplication(), gallery.uri, cached)
                 val sorted = withContext(Dispatchers.Default) { sortPhotos(uriKey, list) }
                 val visible = visiblePhotosForGallery(uriKey, sorted)
                 coroutineContext.ensureActive()
@@ -316,8 +323,9 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                 photos = visible
                 loadingPhotos = false
                 store.savePhotoCache(uriKey, visible)
-                cacheOverview(uriKey, visible)
-                if (cached.isNotEmpty()) refreshPhotos(uriKey, cached = visible)
+                // Only an actual media scan may replace an already refreshed overview.
+                if (!reuseCachedPhotos) cacheOverview(uriKey, visible)
+                if (reuseCachedPhotos) refreshPhotos(uriKey, cached = visible)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -357,7 +365,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         val gallery = galleries.firstOrNull { it.uri.toString() == uriKey } ?: return
         val base = PhotoRepository.overviewFromPhotos(gallery, list)
         val previous = overviews[uriKey]
-        val coversUnchanged = previous?.coverUris == base.coverUris
+        val coversUnchanged = previous?.coverUris == base.coverUris && previous.coverRevisions == base.coverRevisions
         val reusableAssets = coversUnchanged &&
             previous?.postcardCoverPath?.let { File(it).isFile } == true &&
             previous?.ticketCoverPath?.let { File(it).isFile } == true &&
@@ -379,15 +387,16 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             coverBuildJobs.remove(uriKey)?.cancel()
             return
         }
-        if (reusableAssets) return
+        if (invitationStyle == InvitationCardStyle.REVERSAL_FILM || reusableAssets) return
 
         val expectedCoverUris = base.coverUris
+        val expectedCoverRevisions = base.coverRevisions
         coverBuildJobs.remove(uriKey)?.cancel()
         coverBuildJobs[uriKey] = viewModelScope.launch {
             val overview = PhotoRepository.buildOverviewFromPhotos(getApplication(), gallery, list)
             val latestList = photoCache[uriKey] ?: return@launch
-            val latestCoverUris = PhotoRepository.overviewFromPhotos(gallery, latestList).coverUris
-            if (latestCoverUris == expectedCoverUris &&
+            val latest = PhotoRepository.overviewFromPhotos(gallery, latestList)
+            if (latest.coverUris == expectedCoverUris && latest.coverRevisions == expectedCoverRevisions &&
                 galleries.any { it.uri.toString() == uriKey }
             ) {
                 updateOverviewIfChanged(uriKey, overview)
@@ -422,8 +431,12 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
             key to (overviews[key] ?: GalleryOverview(g, loading = true))
         }
         overviews = seeded
-        if (overviewRefreshJob?.isActive == true) return
+        if (overviewRefreshJob?.isActive == true) {
+            overviewRefreshPending = overviewRefreshPending || force
+            return
+        }
         overviewRefreshJob = viewModelScope.launch {
+            try {
             val gallerySnapshot = galleries.toList()
             val memoryCacheSnapshot = photoCache.toMap()
             val cachedPhotosByGallery = withContext(Dispatchers.IO) {
@@ -441,22 +454,40 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
                         val key = gallery.uri.toString()
                         if (!force && overviews[key]?.loading == false) return@launch
                         val cached = cachedPhotosByGallery[key].orEmpty()
+                        val expectedOverview = overviews[key]
                         coverBuildJobs.remove(key)?.cancel()
-                        val overview = PhotoRepository.loadOverview(getApplication(), gallery, cached)
+                        val overview = try {
+                            PhotoRepository.loadOverview(getApplication(), gallery, cached,
+                                includeLegacyCovers = invitationStyle != InvitationCardStyle.REVERSAL_FILM)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            Log.w("PunctumHome", "Overview refresh failed; retaining last good cover", failure)
+                            return@launch
+                        }
                         coverBuildJobs.remove(key)?.cancel()
-                        if (galleries.any { it.uri.toString() == key }) {
+                        if (galleries.any { it.uri.toString() == key } && overviews[key] == expectedOverview) {
                             updateOverviewIfChanged(key, overview)
                         }
                     }
+                }
+            }
+            } finally {
+                overviewRefreshJob = null
+                if (overviewRefreshPending) {
+                    overviewRefreshPending = false
+                    refreshOverviews(force = true)
                 }
             }
         }
     }
 
     private fun updateOverviewIfChanged(uriKey: String, overview: GalleryOverview) {
-        if (overviews[uriKey] == overview) return
-        overviews = overviews + (uriKey to overview)
-        store.saveOverview(overview)
+        val gallery = galleries.firstOrNull { it.uri.toString() == uriKey } ?: return
+        val current = overview.copy(gallery = gallery)
+        if (overviews[uriKey] == current) return
+        overviews = overviews + (uriKey to current)
+        store.saveOverview(current)
     }
 
     fun pauseGalleryThumbnails() {

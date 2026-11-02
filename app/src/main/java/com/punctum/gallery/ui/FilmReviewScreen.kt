@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.os.Build
+import android.util.Log
 import android.view.WindowManager
 import android.view.HapticFeedbackConstants
 import android.graphics.Bitmap
@@ -668,7 +669,7 @@ private fun ProjectionScreen(
             }
         }
         if (photo == null) Text(
-            "选择一张胶片，重映一段时光",
+            "观止，岂止于观",
             color = Bone.copy(alpha = .22f), fontFamily = NotoSerifSc, fontSize = 12.sp,
             letterSpacing = .7.sp, textAlign = TextAlign.Center,
             modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
@@ -786,46 +787,60 @@ private fun FilmSlide(photo: Photo, lamp: State<FilmLampFrame>, art: Film120Art,
 private fun FilmThumbnail(photo: Photo, lamp: State<FilmLampFrame>, modifier: Modifier, onReady: () -> Unit) {
     val context = LocalContext.current
     val ready by rememberUpdatedState(onReady)
-    BoxWithConstraints(modifier) {
-        val density = LocalDensity.current
-        val widthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
-        val heightPx = with(density) { maxHeight.roundToPx() }.coerceAtLeast(1)
-        val request = remember(photo.uri, photo.thumbnailPath, widthPx, heightPx) {
-            ImageRequest.Builder(context).data(PhotoStill.forList(photo))
-                .size(widthPx, heightPx).scale(coil.size.Scale.FILL).crossfade(false).build()
-        }
-        val painter = rememberAsyncImagePainter(request)
-        val state = painter.state
-        LaunchedEffect(state) {
-            if (state is AsyncImagePainter.State.Success || state is AsyncImagePainter.State.Error) ready()
-        }
-        val bitmap = remember(state) { (state as? AsyncImagePainter.State.Success)?.result?.drawable?.toBitmap() }
-        val source = remember(bitmap) {
-            bitmap?.let {
-                val crop = Film120Geometry.crop(it.width, it.height)
-                Rect(crop.left, crop.top, crop.left + crop.side, crop.top + crop.side)
+    key(photo.uri, photo.modifiedMillis, photo.fileSizeBytes) {
+        BoxWithConstraints(modifier) {
+            val density = LocalDensity.current
+            val widthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
+            val heightPx = with(density) { maxHeight.roundToPx() }.coerceAtLeast(1)
+            val request = remember(photo.uri, photo.modifiedMillis, photo.fileSizeBytes, photo.thumbnailPath, widthPx, heightPx) {
+                ImageRequest.Builder(context).data(PhotoStill.forList(photo))
+                    .size(widthPx, heightPx).scale(coil.size.Scale.FILL).crossfade(false).build()
             }
-        }
-        val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG) }
-        val lampFilter = remember { FilmLampFilter() }
-        val destination = remember { android.graphics.RectF() }
-        Canvas(Modifier.fillMaxSize()) {
-            if (bitmap != null && source != null) {
-                // Read shared light state only while drawing; preserve source cropping and antialiasing.
-                val frame = lamp.value
-                paint.alpha = 255
-                paint.colorFilter = lampFilter.forFrame(frame, photograph = true)
-                destination.set(0f, 0f, size.width, size.height)
-                drawIntoCanvas {
-                    it.nativeCanvas.drawBitmap(bitmap, source, destination, paint)
-                    // Retain a little source detail above the clipping threshold, then restore full color.
-                    if (frame.originalMix > 0f && frame.originalMix < 1f) {
-                        paint.colorFilter = null
-                        paint.alpha = (frame.originalMix * 255f).roundToInt()
-                        it.nativeCanvas.drawBitmap(bitmap, source, destination, paint)
-                    }
+            val painter = rememberAsyncImagePainter(request)
+            val state = painter.state
+            // The warmer upgrades a new photo from its system preview to a local HQ
+            // thumbnail. Coil resets to Loading during that source change: retain the
+            // displayed frame until its replacement succeeds, scoped to this exact photo.
+            var retainedBitmap by remember(photo.uri, photo.modifiedMillis, photo.fileSizeBytes) {
+                mutableStateOf<Bitmap?>(null)
+            }
+            val decodedBitmap = remember(state) { (state as? AsyncImagePainter.State.Success)?.result?.drawable?.toBitmap() }
+            SideEffect { if (decodedBitmap != null) retainedBitmap = decodedBitmap }
+            val bitmap = decodedBitmap ?: retainedBitmap
+            LaunchedEffect(state, request) {
+                val logTag = "PunctumFilmThumb"
+                if (Log.isLoggable(logTag, Log.DEBUG)) {
+                    Log.d(logTag, "state=${state.javaClass.simpleName} source=${if (photo.thumbnailPath == null) "preview" else "hq"} retained=${retainedBitmap != null} drawable=${bitmap != null}")
                 }
-            } else drawRect(Color(0xFF252C26))
+                if (state is AsyncImagePainter.State.Success || state is AsyncImagePainter.State.Error) ready()
+            }
+            val source = remember(bitmap) {
+                bitmap?.let {
+                    val crop = Film120Geometry.crop(it.width, it.height)
+                    Rect(crop.left, crop.top, crop.left + crop.side, crop.top + crop.side)
+                }
+            }
+            val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG) }
+            val lampFilter = remember { FilmLampFilter() }
+            val destination = remember { android.graphics.RectF() }
+            Canvas(Modifier.fillMaxSize()) {
+                if (bitmap != null && source != null) {
+                    // Read shared light state only while drawing; preserve source cropping and antialiasing.
+                    val frame = lamp.value
+                    paint.alpha = 255
+                    paint.colorFilter = lampFilter.forFrame(frame, photograph = true)
+                    destination.set(0f, 0f, size.width, size.height)
+                    drawIntoCanvas {
+                        it.nativeCanvas.drawBitmap(bitmap, source, destination, paint)
+                        // Retain a little source detail above the clipping threshold, then restore full color.
+                        if (frame.originalMix > 0f && frame.originalMix < 1f) {
+                            paint.colorFilter = null
+                            paint.alpha = (frame.originalMix * 255f).roundToInt()
+                            it.nativeCanvas.drawBitmap(bitmap, source, destination, paint)
+                        }
+                    }
+                } else drawRect(Color(0xFF252C26))
+            }
         }
     }
 }
