@@ -186,6 +186,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         gallerySortJob?.cancel()
         sortingPhotos = false
         cancelGalleryEntryWork()
+        com.punctum.gallery.data.DetailImagePipeline.pause()
         photoRefreshJobs.remove(uriKey)?.cancel()
         detailReturnPending = false
         galleryReturnPhotoID = null
@@ -538,27 +539,14 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun warmDetailImages(centerIndex: Int) {
-        val context = getApplication<Application>()
-        val list = photos
-        if (list.isEmpty()) return
-        val from = (centerIndex - 2).coerceAtLeast(0)
-        val to = (centerIndex + 3).coerceAtMost(list.lastIndex)
-        viewModelScope.launch(Dispatchers.IO) {
-            val loader = coil.Coil.imageLoader(context)
-            for (index in from..to) {
-                val photo = list[index]
-                loader.enqueue(
-                    coil.request.ImageRequest.Builder(context)
-                        .data(com.punctum.gallery.data.PhotoStill.forDetail(photo))
-                        .memoryCacheKey("detail:${photo.uri}")
-                        .diskCacheKey("detail:${photo.uri}")
-                        .size(1800)
-                        .crossfade(false)
-                        .build()
-                )
-            }
-        }
+        com.punctum.gallery.data.DetailImagePipeline.warm(getApplication(), photos, centerIndex, radius = 5)
     }
+
+    fun warmVisibleDetailImages(first: Int, last: Int) {
+        if (selectedIndex == null) com.punctum.gallery.data.DetailImagePipeline.warmVisible(getApplication(), photos, first, last)
+    }
+
+    fun pauseVisibleDetailImages() { com.punctum.gallery.data.DetailImagePipeline.pauseVisible() }
 
     /** All thumbnail lists ask before changing selection, visibility or media. */
     fun deletePhoto(photo: Photo) {
@@ -882,6 +870,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         galleryReturnPhotoID = null
         detailReturnPending = false
         photos.getOrNull(index)?.let(::recordDetailPhoto)
+        warmDetailImages(index)
         selectedIndex = index
     }
 
@@ -900,6 +889,7 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         if (!detailReturnPending) return
         detailReturnPending = false
         selectedIndex = null
+        com.punctum.gallery.data.DetailImagePipeline.pause()
         val pending = queuedDetailDeletePhotos.distinctBy { it.uri }
         queuedDetailDeletePhotos.clear()
         if (pending.isNotEmpty()) pendingDetailDeleteConfirmation = pending

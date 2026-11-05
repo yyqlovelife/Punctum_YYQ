@@ -23,7 +23,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -48,9 +50,11 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -62,8 +66,13 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.FirstBaseline
@@ -117,6 +126,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -185,7 +195,7 @@ internal fun FilmReviewScreen(
         }
     }
     val scope = rememberCoroutineScope()
-    val haptics = LocalHapticFeedback.current
+    var projectionBusy by remember { mutableStateOf(false) }
     var selectedID by rememberSaveable(gallery.uri.toString()) { mutableStateOf<String?>(null) }
     var infoVisible by rememberSaveable(gallery.uri.toString()) { mutableStateOf(false) }
     var menuExpanded by remember(gallery.uri) { mutableStateOf(false) }
@@ -209,6 +219,7 @@ internal fun FilmReviewScreen(
     var displayedID by remember { mutableStateOf<String?>(null) }
     var previousSort by remember { mutableStateOf(gallery.sortOrder) }
     val latestVisible by rememberUpdatedState(visible)
+    val projectionDeletionAllowed by rememberUpdatedState(!deleting && !sorting)
     var readyIDs by remember { mutableStateOf(emptySet<String>()) }
     val firstPageIDs = visible.take(FILM_PAGE_SIZE).map { it.uri.toString() }.toSet()
     val ready by rememberUpdatedState(onContentReady)
@@ -259,11 +270,14 @@ internal fun FilmReviewScreen(
     LaunchedEffect(pager) {
         snapshotFlow { pager.isScrollInProgress to pager.currentPage }.collect { (scrolling, page) ->
             onPauseThumbnails()
+            com.punctum.gallery.data.DetailImagePipeline.pauseVisible()
             if (!scrolling && latestVisible.isNotEmpty()) {
                 val first = (page * FILM_PAGE_SIZE).coerceAtMost(latestVisible.lastIndex)
                 // The existing cache warmer uses the original gallery's indices.
                 val start = photos.indexOfFirst { it.uri == latestVisible[first].uri }.coerceAtLeast(0)
                 onWarmThumbnails(start, min(start + FILM_PAGE_SIZE - 1, photos.lastIndex))
+                com.punctum.gallery.data.DetailImagePipeline.warmVisible(context, photos, start,
+                    min(start + FILM_PAGE_SIZE - 1, photos.lastIndex))
             }
         }
     }
@@ -274,9 +288,11 @@ internal fun FilmReviewScreen(
     }
 
     fun select(photo: Photo, project: Boolean) {
+        if (project && projectionBusy) return
         val replay = displayedID == photo.uri.toString()
         val animate = project && ValueAnimator.areAnimatorsEnabled()
         revealJob?.cancel()
+        onWarmImages(photos.indexOfFirst { it.uri == photo.uri }.coerceAtLeast(0))
         selectedID = photo.uri.toString()
         awaitingProjection = if (animate && !replay) selectedID else null
         revealJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -286,26 +302,21 @@ internal fun FilmReviewScreen(
         }
     }
 
-    val changePhoto: (Int) -> Unit = { step ->
-        visible.getOrNull(selectedIndex + step)?.let { photo ->
-            select(photo, false)
-            scope.launch { pager.scrollToPage((selectedIndex + step) / FILM_PAGE_SIZE) }
-        }
-    }
     fun queuePhotoDeletion(photo: Photo) {
-        if (deleting || sorting || visible.none { it.uri == photo.uri }) return
+        val remaining = latestVisible
+        val present = remaining.any { it.uri == photo.uri }
+        val logTag = "PunctumProjection"
+        if (Log.isLoggable(logTag, Log.DEBUG)) Log.d(logTag, "delete-queue count=${remaining.size} accepted=${projectionDeletionAllowed && present}")
+        if (!projectionDeletionAllowed || !present) return
         if (selectedID == photo.uri.toString()) {
-            val replacement = filmReplacement(visible.map { it.uri.toString() }, photo.uri.toString())
+            val replacement = filmReplacement(remaining.map { it.uri.toString() }, photo.uri.toString())
             revealJob?.cancel()
             awaitingProjection = null
             selectedID = replacement
             scope.launch { reveal.snapTo(1f) }
         }
         onDelete(photo)
-        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-    }
-    val queueDelete: () -> Unit = {
-        selected?.takeIf { it.uri.toString() == displayedID }?.let(::queuePhotoDeletion)
+        view.performDeleteHaptic()
     }
 
     ProvideTextStyle(MaterialTheme.typography.bodyMedium) {
@@ -318,6 +329,7 @@ internal fun FilmReviewScreen(
                 ProjectionScreen(
                     targetPhoto = selected,
                     photos = photos,
+                    projectionPhotos = visible,
                     infoVisible = infoVisible,
                     minimumMargin = 48.dp,
                     showUsageHint = showUsageHint,
@@ -330,14 +342,15 @@ internal fun FilmReviewScreen(
                             startY = size.height - 40.dp.toPx(), endY = size.height))
                     },
                     gesturesEnabled = !loading && !sorting && !deleting,
-                    onGesture = { gesture ->
-                        when (gesture) {
-                            FilmGesture.PREVIOUS -> changePhoto(-1)
-                            FilmGesture.NEXT -> changePhoto(1)
-                            FilmGesture.DELETE -> queueDelete()
-                            FilmGesture.NONE -> Unit
-                        }
+                    onSelectPhoto = { photo ->
+                        select(photo, false)
+                        val index = visible.indexOfFirst { it.uri == photo.uri }
+                        if (index >= 0) scope.launch { pager.scrollToPage(index / FILM_PAGE_SIZE) }
                     },
+                    // A lambda refreshes captured album contents after the initial load.
+                    // Local function references can compare equal despite stale captures.
+                    onDeletePhoto = { photo -> queuePhotoDeletion(photo) },
+                    onInteractionChanged = { projectionBusy = it },
                     onImageReady = { id ->
                         displayedID = id
                         val originalIndex = photos.indexOfFirst { it.uri.toString() == id }
@@ -490,6 +503,8 @@ private fun FilmInkText(text: String, ink: FilmTextInk, font: FontFamily, fontSi
     }
 }
 
+private val filmCurtainRasters = LinkedHashMap<String, ImageBitmap>(3, .75f, true)
+
 /** Static folds and cached weave paths read as a matte screen even before a slide is selected. */
 private fun Modifier.filmCurtain(empty: Boolean): Modifier = drawWithCache {
     val center = Offset(size.width / 2f, size.height / 2f)
@@ -508,12 +523,24 @@ private fun Modifier.filmCurtain(empty: Boolean): Modifier = drawWithCache {
     val vignette = Brush.radialGradient(0f to Color.Transparent, .42f to Color.Transparent,
         .80f to Color.Black.copy(alpha = if (empty) .42f else .28f), 1f to Color.Black.copy(alpha = .78f),
         center = center, radius = max(size.width * .76f, size.height * .65f))
+    val cacheKey = "${size.width.toInt()}x${size.height.toInt()}:$density:$fontScale:$empty:$layoutDirection"
+    val raster = synchronized(filmCurtainRasters) {
+        filmCurtainRasters[cacheKey] ?: ImageBitmap(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1)).also { bitmap ->
+            val target = androidx.compose.ui.graphics.Canvas(bitmap)
+            CanvasDrawScope().draw(this, layoutDirection, target, size) {
+                drawRect(base)
+                drawRect(folds)
+                drawPath(weave, Color(0xFF9B9B9D).copy(alpha = .035f), style = Stroke(.35.dp.toPx()))
+                drawRect(glow)
+                drawRect(vignette)
+            }
+            bitmap.asAndroidBitmap().prepareToDraw()
+            filmCurtainRasters[cacheKey] = bitmap
+            while (filmCurtainRasters.size > 2) filmCurtainRasters.remove(filmCurtainRasters.keys.first())
+        }
+    }
     onDrawBehind {
-        drawRect(base)
-        drawRect(folds)
-        drawPath(weave, Color(0xFF9B9B9D).copy(alpha = .035f), style = androidx.compose.ui.graphics.drawscope.Stroke(.35.dp.toPx()))
-        drawRect(glow)
-        drawRect(vignette)
+        drawImage(raster)
     }
 }
 
@@ -521,72 +548,292 @@ private data class LoadedFilmProjection(val photo: Photo, val bitmap: ImageBitma
 
 @Composable
 private fun ProjectionScreen(
-    targetPhoto: Photo?, photos: List<Photo>, infoVisible: Boolean, reveal: State<Float>,
-    minimumMargin: androidx.compose.ui.unit.Dp,
-    showUsageHint: Boolean,
-    modifier: Modifier, gesturesEnabled: Boolean,
-    onGesture: (FilmGesture) -> Unit, onImageReady: (String) -> Unit,
-    onImageError: (String) -> Unit,
+    targetPhoto: Photo?, photos: List<Photo>, projectionPhotos: List<Photo>,
+    infoVisible: Boolean, reveal: State<Float>, minimumMargin: androidx.compose.ui.unit.Dp,
+    showUsageHint: Boolean, modifier: Modifier, gesturesEnabled: Boolean,
+    onSelectPhoto: (Photo) -> Unit, onDeletePhoto: (Photo) -> Unit,
+    onInteractionChanged: (Boolean) -> Unit,
+    onImageReady: (String) -> Unit, onImageError: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    var loaded by remember { mutableStateOf<LoadedFilmProjection?>(null) }
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val frames = remember { mutableStateMapOf<String, LoadedFilmProjection>() }
+    val zoom = remember { ProjectionPhotoZoom(scope) }
+    var projectionViewport by remember { mutableStateOf(ComposeRect.Zero) }
+    val zoomFrame by rememberUpdatedState<(Float, Float) -> ComposeRect>({ width, height ->
+        val layout = filmProjectionFrame(targetPhoto?.aspectRatio ?: 1f, width / density.density,
+            height / density.density, infoVisible, minimumMargin.value)
+        val imageWidth = layout.size.width * density.density
+        val imageHeight = layout.size.height * density.density
+        ComposeRect((width - imageWidth) / 2f, layout.top * density.density,
+            (width + imageWidth) / 2f, layout.top * density.density + imageHeight)
+    })
+    LaunchedEffect(targetPhoto?.uri, infoVisible, gesturesEnabled) { zoom.clear() }
+    val zoomLifecycle = (generateSequence(context) { (it as? ContextWrapper)?.baseContext }
+        .filterIsInstance<androidx.lifecycle.LifecycleOwner>().firstOrNull())?.lifecycle
+    DisposableEffect(zoomLifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) zoom.clear()
+        }
+        zoomLifecycle?.addObserver(observer)
+        onDispose { zoomLifecycle?.removeObserver(observer); zoom.clear() }
+    }
+    val ids = projectionPhotos.map { "${it.uri}:${it.modifiedMillis}:${it.fileSizeBytes}" }
+    val latestPhotos by rememberUpdatedState(projectionPhotos)
+    val currentTarget by rememberUpdatedState(targetPhoto)
+    val selectPhoto by rememberUpdatedState(onSelectPhoto)
+    val deletePhoto by rememberUpdatedState(onDeletePhoto)
     val imageReady by rememberUpdatedState(onImageReady)
     val imageError by rememberUpdatedState(onImageError)
-    LaunchedEffect(targetPhoto?.uri, targetPhoto?.stillImageByteCount) {
-        if (targetPhoto == null) {
-            loaded = null
-        } else {
-            // Share the original detail cache and its exact decode size with the neighbor warmer.
-            val result = Coil.imageLoader(context).execute(
-                ImageRequest.Builder(context)
-                    .data(PhotoStill.forDetail(targetPhoto))
-                    .memoryCacheKey("detail:${targetPhoto.uri}")
-                    .diskCacheKey("detail:${targetPhoto.uri}")
-                    .size(1800).crossfade(false).build(),
-            )
-            if (result is SuccessResult) {
-                loaded = LoadedFilmProjection(targetPhoto, result.drawable.toBitmap().asImageBitmap())
-                imageReady(targetPhoto.uri.toString())
-            } else imageError(targetPhoto.uri.toString())
+    val interactionChanged by rememberUpdatedState(onInteractionChanged)
+    val projectionPager = rememberPagerState(
+        initialPage = projectionPhotos.indexOfFirst { it.uri == targetPhoto?.uri }.coerceAtLeast(0),
+    ) { projectionPhotos.size.coerceAtLeast(1) }
+    val userDragging by projectionPager.interactionSource.collectIsDraggedAsState()
+    var syncingTarget by remember { mutableStateOf(false) }
+    var hasDisplayedProjection by remember { mutableStateOf(false) }
+    var deleteDrag by remember { mutableStateOf(0f) }
+    var deleteCommit by remember { mutableStateOf(0f) }
+    var committedDrag by remember { mutableStateOf(0f) }
+    var deleteLocked by remember { mutableStateOf(false) }
+    var activeDeletePhoto by remember { mutableStateOf<Photo?>(null) }
+    var deleteJob by remember { mutableStateOf<Job?>(null) }
+    var deleteTargetCenterY by remember { mutableStateOf<Float?>(null) }
+    val deleteVisible by remember { derivedStateOf { deleteDrag > 0f || deleteLocked } }
+    val armed by remember { derivedStateOf { deleteLocked || deleteDrag >= DELETE_ARM_PROGRESS } }
+    val settledPhoto = projectionPhotos.getOrNull(projectionPager.settledPage)
+    val canDrag by rememberUpdatedState(gesturesEnabled && hasDisplayedProjection && !deleteLocked && !zoom.isActive &&
+        settledPhoto?.uri == targetPhoto?.uri && targetPhoto != null && frames[targetPhoto.uri.toString()] != null)
+    fun traceProjection(message: String) {
+        val logTag = "PunctumProjection"
+        if (Log.isLoggable(logTag, Log.DEBUG)) Log.d(logTag, message)
+    }
+
+    suspend fun load(photo: Photo): LoadedFilmProjection? {
+        frames[photo.uri.toString()]?.takeIf {
+            it.photo.modifiedMillis == photo.modifiedMillis && it.photo.fileSizeBytes == photo.fileSizeBytes
+        }?.let { return it }
+        val bitmap = com.punctum.gallery.data.DetailImagePipeline.load(context, photo) ?: return null
+        return LoadedFilmProjection(photo, bitmap.asImageBitmap())
+            .also { frame -> frames[photo.uri.toString()] = frame }
+    }
+
+    // Thumbnail selection changes the page only after the replacement is decoded.
+    // Pager swipes already place that same photo at center before notifying the parent.
+    LaunchedEffect(targetPhoto?.uri, ids) {
+        traceProjection("target-sync count=${ids.size}")
+        deleteJob?.cancel()
+        deleteDrag = 0f; deleteCommit = 0f; deleteLocked = false; activeDeletePhoto = null
+        val target = targetPhoto ?: run { hasDisplayedProjection = false; return@LaunchedEffect }
+        val index = projectionPhotos.indexOfFirst { it.uri == target.uri }
+        if (index < 0) return@LaunchedEffect
+        if (load(target) == null) { imageError(target.uri.toString()); return@LaunchedEffect }
+        syncingTarget = true
+        try {
+            if (projectionPager.currentPage != index || projectionPager.currentPageOffsetFraction != 0f) {
+                projectionPager.scrollToPage(index)
+            }
+            imageReady(target.uri.toString())
+            hasDisplayedProjection = true
+        } finally { syncingTarget = false }
+    }
+    // A bounded decoded neighborhood makes both adjacent images available during the drag.
+    LaunchedEffect(projectionPager.settledPage, ids, targetPhoto?.uri) {
+        if (targetPhoto == null) return@LaunchedEffect
+        val center = projectionPager.settledPage
+        val keep = ((center - 1)..(center + 1)).mapNotNull(projectionPhotos::getOrNull)
+        val keepIDs = (keep.map { it.uri.toString() } + targetPhoto.uri.toString()).toSet()
+        frames.keys.toList().filterNot { it in keepIDs }.forEach(frames::remove)
+        coroutineScope { keep.forEach { photo -> launch { load(photo) } } }
+    }
+    LaunchedEffect(projectionPager) {
+        var userMoved = false
+        snapshotFlow { userDragging to projectionPager.isScrollInProgress }.collect { (dragging, scrolling) ->
+            if (dragging) userMoved = true
+            else if (!scrolling && userMoved) {
+                userMoved = false
+                latestPhotos.getOrNull(projectionPager.settledPage)?.let {
+                    if (it.uri != currentTarget?.uri) selectPhoto(it)
+                }
+            }
         }
     }
-    // Image, border, geometry and metadata are replaced together, after decoding succeeds.
-    val photo = loaded?.let { if (targetPhoto?.uri == it.photo.uri) targetPhoto else it.photo }
+    // Observe the gesture flag in composition: retained zoom stays active after fingers lift,
+    // but the table must unlock so selecting another thumbnail can clear that zoom.
+    val interactionBusy = projectionPager.isScrollInProgress || deleteVisible ||
+        deleteJob?.isActive == true || zoom.gestureInProgress
+    SideEffect { interactionChanged(interactionBusy) }
+    DisposableEffect(Unit) {
+        onDispose { deleteJob?.cancel(); interactionChanged(false) }
+    }
+    LaunchedEffect(gesturesEnabled) {
+        if (!gesturesEnabled) {
+            deleteJob?.cancel()
+            deleteDrag = 0f; deleteCommit = 0f; deleteLocked = false; activeDeletePhoto = null
+        }
+    }
+
+    fun finishDelete(cancelled: Boolean) {
+        val photo = activeDeletePhoto ?: return
+        val progress = deleteDrag
+        traceProjection("delete-release cancelled=$cancelled progress=$progress")
+        deleteJob = scope.launch {
+            if (!cancelled && progress >= DELETE_ARM_PROGRESS) {
+                deleteLocked = true
+                committedDrag = progress
+                try {
+                    val list = latestPhotos
+                    val index = list.indexOfFirst { it.uri == photo.uri }
+                    val replacement = list.getOrNull(index + 1) ?: list.getOrNull(index - 1)
+                    if (replacement != null && load(replacement) == null) return@launch
+
+                    Animatable(0f).animateTo(1f, tween(
+                        if (ValueAnimator.areAnimatorsEnabled()) DELETE_COMMIT_DURATION_MS else 0,
+                        easing = LinearEasing,
+                    )) { deleteCommit = value }
+                    // Queue only after the visual commit, once, using the captured identity.
+                    traceProjection("delete-commit")
+                    deletePhoto(photo)
+                } finally {
+                    traceProjection("delete-finished commit=$deleteCommit")
+                    deleteDrag = 0f; deleteCommit = 0f; deleteLocked = false; activeDeletePhoto = null
+                }
+            } else {
+                Animatable(progress).animateTo(0f, tween(if (ValueAnimator.areAnimatorsEnabled()) 235 else 0)) {
+                    deleteDrag = value
+                }
+                activeDeletePhoto = null
+            }
+        }
+    }
+
+    BoxWithConstraints(
+        modifier.onGloballyPositioned { projectionViewport = it.boundsInWindow() }.clipToBounds().filmCurtain(empty = targetPhoto == null)
+            .semantics { if (targetPhoto == null) contentDescription = "等待胶片投影的幕布" }
+            .projectionZoomInput(zoom, targetPhoto?.uri, gesturesEnabled && targetPhoto != null,
+                android.view.ViewConfiguration.get(context).scaledDoubleTapSlop.toFloat(),
+                frame = { width, height -> zoomFrame(width, height) },
+                canStart = { hasDisplayedProjection && !syncingTarget && !deleteLocked &&
+                    !projectionPager.isScrollInProgress && frames[currentTarget?.uri.toString()] != null },
+                onClaim = {
+                    deleteJob?.cancel()
+                    deleteDrag = 0f; deleteCommit = 0f; activeDeletePhoto = null
+                })
+            .pointerInput(targetPhoto != null, gesturesEnabled) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (!canDrag) return@awaitEachGesture
+                    deleteJob?.cancel()
+                    var total = Offset.Zero
+                    var axis = FilmProjectionAxis.UNDECIDED
+                    var cancelled = false
+                    var released = false
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.changes.count { it.pressed } > 1 || zoom.isActive ||
+                                event.changes.any { it.isConsumed }) { cancelled = true; break }
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null) { cancelled = true; break }
+                            if (!change.pressed) { released = true; break }
+                            total += change.positionChange()
+                            if (axis == FilmProjectionAxis.UNDECIDED) {
+                                axis = filmProjectionAxis(total.x, total.y, viewConfiguration.touchSlop)
+                            }
+                            if (axis == FilmProjectionAxis.UPWARD) {
+                                if (activeDeletePhoto == null) activeDeletePhoto = latestPhotos.getOrNull(projectionPager.settledPage)
+                                deleteDrag = mapDeleteDragProgress((-total.y).coerceAtLeast(0f) / with(density) { 140.dp.toPx() })
+                                change.consume()
+                            }
+                        }
+                    } finally {
+                        if (axis == FilmProjectionAxis.UPWARD) finishDelete(cancelled || !released)
+                    }
+                }
+            },
+    ) {
+        val still = remember { mutableStateOf(1f) }
+        if (targetPhoto == null || !hasDisplayedProjection) {
+            ProjectionPhotoContent(null, null, photos, infoVisible, still, minimumMargin, false, Modifier.fillMaxSize())
+        }
+        if (targetPhoto != null) {
+            // Mount before scrollToPage: an initial thumbnail can target any page,
+            // and Pager must complete its first layout even while the image is hidden.
+            HorizontalPager(
+                state = projectionPager, key = { page -> projectionPhotos.getOrNull(page)?.uri.toString() },
+                beyondViewportPageCount = 1,
+                userScrollEnabled = gesturesEnabled && hasDisplayedProjection && !deleteVisible && !syncingTarget && !zoom.isActive,
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (deleteVisible || !hasDisplayedProjection) 0f else 1f },
+            ) { page ->
+                projectionPhotos.getOrNull(page)?.let { photo ->
+                    ProjectionPhotoContent(photo, frames[photo.uri.toString()], photos, infoVisible,
+                        if (photo.uri == targetPhoto.uri) reveal else still, minimumMargin, showUsageHint,
+                        Modifier.fillMaxSize().pointerInput(photo.uri, gesturesEnabled) {
+                            detectTapGestures { position ->
+                                if (gesturesEnabled && !zoom.isActive && !deleteVisible && !projectionPager.isScrollInProgress) {
+                                    val step = when (filmEdgeTap(position.x, size.width.toFloat())) {
+                                        FilmGesture.PREVIOUS -> -1
+                                        FilmGesture.NEXT -> 1
+                                        else -> 0
+                                    }
+                                    val next = projectionPager.currentPage + step
+                                    val destination = latestPhotos.getOrNull(next)
+                                    if (step != 0 && destination != null) scope.launch {
+                                        // Edge taps are immediate quick cuts; dragging keeps native paging.
+                                        projectionPager.scrollToPage(next)
+                                        selectPhoto(destination)
+                                    }
+                                }
+                            }
+                        }, zoom = zoom.takeIf { photo.uri == targetPhoto.uri },
+                        viewportInWindow = { projectionViewport },
+                        tilesEnabled = gesturesEnabled && !deleteVisible && !projectionPager.isScrollInProgress && photo.uri == targetPhoto.uri)
+                }
+            }
+        }
+        if (deleteVisible) activeDeletePhoto?.let { active ->
+            val index = projectionPhotos.indexOfFirst { it.uri == active.uri }
+            val replacement = projectionPhotos.getOrNull(index + 1) ?: projectionPhotos.getOrNull(index - 1)
+            val backgroundReveal = { deleteBackgroundReveal(deleteDrag, deleteCommit, committedDrag) }
+            replacement?.takeIf { frames[it.uri.toString()] != null }?.let { next ->
+                ProjectionPhotoContent(next, frames[next.uri.toString()], photos, infoVisible, still, minimumMargin, false,
+                    Modifier.fillMaxSize().graphicsLayer { alpha = backgroundReveal() }, showInformation = false)
+            }
+            val motion = Modifier.deletePageTransform({ deleteDrag }, { deleteCommit }, { committedDrag },
+                (deleteTargetCenterY ?: with(density) { 82.dp.toPx() }) - with(density) { maxHeight.toPx() } / 2f, density)
+                .drawWithContent {
+                    drawContent()
+                    val radius = deletePageCornerRadius(deleteDrag, deleteCommit, committedDrag).dp.toPx()
+                    drawRoundRect(Bone.copy(alpha = (maxOf(deleteDrag, committedDrag) / .42f).coerceIn(0f, 1f) * .10f),
+                        cornerRadius = CornerRadius(radius), style = Stroke(.75.dp.toPx()))
+                }
+            ProjectionPhotoContent(active, frames[active.uri.toString()], photos, infoVisible, reveal, minimumMargin, false,
+                Modifier.fillMaxSize(), imageMotion = motion, glowAlpha = { 1f - backgroundReveal() })
+        }
+        SwipeDeleteIndicator(deleteVisible, armed, { deleteCommit }, false,
+            Modifier.align(Alignment.TopCenter).padding(top = 58.dp), onTargetCenterY = { deleteTargetCenterY = it })
+    }
+}
+
+@Composable
+private fun ProjectionPhotoContent(
+    photo: Photo?, loaded: LoadedFilmProjection?, photos: List<Photo>,
+    infoVisible: Boolean, reveal: State<Float>, minimumMargin: androidx.compose.ui.unit.Dp,
+    showUsageHint: Boolean, modifier: Modifier = Modifier,
+    imageMotion: Modifier = Modifier, showInformation: Boolean = true,
+    glowAlpha: () -> Float = { 1f },
+    zoom: ProjectionPhotoZoom? = null,
+    viewportInWindow: () -> ComposeRect = { ComposeRect.Zero },
+    tilesEnabled: Boolean = false,
+) {
+    val context = LocalContext.current
     val number = photo?.let { current -> photos.indexOfFirst { it.uri == current.uri } + 1 }
-    val density = LocalDensity.current
-    val threshold = with(density) { 52.dp.toPx() }
-    var drag by remember { mutableStateOf(Offset.Zero) }
-    val gesture by rememberUpdatedState(onGesture)
-    val releaseEnabled by rememberUpdatedState(gesturesEnabled)
     var place by remember(photo?.uri) { mutableStateOf<String?>(null) }
     LaunchedEffect(photo?.uri, infoVisible) {
         if (infoVisible && photo != null) place = photo.latLong?.let { PhotoRepository.reverseGeocode(context, it[0], it[1]) }
     }
-    BoxWithConstraints(
-        modifier.clipToBounds()
-            .filmCurtain(empty = photo == null)
-            .semantics { if (photo == null) contentDescription = "等待胶片投影的幕布" }
-            .pointerInput(photo != null, gesturesEnabled) {
-                if (photo == null || !gesturesEnabled) return@pointerInput
-                detectTapGestures(onTap = { position ->
-                    if (releaseEnabled) gesture(filmEdgeTap(position.x, size.width.toFloat()))
-                })
-            }
-            .pointerInput(photo != null, gesturesEnabled) {
-                if (photo == null || !gesturesEnabled) return@pointerInput
-                detectDragGestures(
-                    onDragStart = { drag = Offset.Zero },
-                    onDrag = { change, amount ->
-                        if (releaseEnabled) { drag += amount; change.consume() }
-                    },
-                    onDragCancel = { drag = Offset.Zero },
-                    onDragEnd = {
-                        if (releaseEnabled) gesture(filmGesture(drag.x, drag.y, threshold))
-                        drag = Offset.Zero
-                    },
-                )
-            },
-    ) {
+    BoxWithConstraints(modifier) {
         // Portraits use the full immersive height; landscape sizes remain width-limited.
         val resting = filmProjectionFrame(photo?.aspectRatio ?: 1f, maxWidth.value, maxHeight.value, false, minimumMargin.value)
         val raised = filmProjectionFrame(photo?.aspectRatio ?: 1f, maxWidth.value, maxHeight.value, true, minimumMargin.value)
@@ -598,12 +845,12 @@ private fun ProjectionScreen(
         val raisedScale = if (fitted.height > 0f) raised.size.height / fitted.height else 1f
         val raisedShift = raised.top + raised.size.height / 2f - resting.top - fitted.height / 2f
         val imageTop = resting.top.dp
-        if (photo != null) Canvas(
+        if (photo != null && loaded != null) Canvas(
             Modifier.fillMaxSize().graphicsLayer {
                 // Read animation state in the layer phase, never in the screen's composition.
                 val lift = informationLift.value
                 compositingStrategy = CompositingStrategy.ModulateAlpha
-                alpha = reveal.value
+                alpha = reveal.value * glowAlpha()
                 scaleX = 1f + (raisedScale - 1f) * lift
                 scaleY = scaleX
                 translationY = raisedShift.dp.toPx() * lift
@@ -614,7 +861,7 @@ private fun ProjectionScreen(
             val imageWidth = fitted.width.dp.toPx()
             val imageHeight = fitted.height.dp.toPx()
             val bottom = center.y + imageHeight / 2f
-            drawImage(loaded!!.bitmap,
+            drawImage(loaded.bitmap,
                 dstOffset = IntOffset((center.x - imageWidth * .515f).roundToInt(), (center.y - imageHeight * .515f).roundToInt()),
                 dstSize = IntSize((imageWidth * 1.03f).roundToInt().coerceAtLeast(1), (imageHeight * 1.03f).roundToInt().coerceAtLeast(1)),
                 alpha = .18f)
@@ -635,7 +882,15 @@ private fun ProjectionScreen(
         Box(Modifier.fillMaxWidth().height(fitted.height.dp).offset(y = imageTop), contentAlignment = Alignment.Center) {
             if (photo != null) key(photo.uri) {
                 Box(
-                    Modifier.size(fitted.width.dp, fitted.height.dp)
+                    Modifier.size(fitted.width.dp, fitted.height.dp).then(imageMotion)
+                        .graphicsLayer {
+                            val pose = zoom?.pose ?: PhotoZoomState()
+                            scaleX = pose.scale
+                            scaleY = pose.scale
+                            translationX = pose.offsetX
+                            // Keep the info-raised photo's center fixed while scaling around its original layer.
+                            translationY = pose.offsetY + (1f - pose.scale) * raisedShift.dp.toPx() * informationLift.value
+                        }
                         .graphicsLayer {
                             val phase = reveal.value
                             val lift = informationLift.value
@@ -643,14 +898,10 @@ private fun ProjectionScreen(
                             alpha = phase
                             scaleX = (.94f + .06f * phase) * (1f + (raisedScale - 1f) * lift)
                             scaleY = scaleX
-                            translationY = raisedShift.dp.toPx() * lift + (1f - phase) * size.height * .06f + min(0f, drag.y) * .2f
-                            translationX = drag.x.coerceIn(-90.dp.toPx(), 90.dp.toPx()) * .28f
+                            translationY = raisedShift.dp.toPx() * lift + (1f - phase) * size.height * .06f
                         },
                 ) {
-                    Image(
-                        bitmap = loaded!!.bitmap,
-                        contentDescription = "投影 ${photo.name}", contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize().drawWithCache {
+                    if (loaded != null) Box(Modifier.fillMaxSize().drawWithCache {
                             val horizontal = Brush.horizontalGradient(0f to Color.Black.copy(alpha = .16f), .09f to Color.Transparent,
                                 .91f to Color.Transparent, 1f to Color.Black.copy(alpha = .16f))
                             val vertical = Brush.verticalGradient(0f to Color.Black.copy(alpha = .12f), .10f to Color.Transparent,
@@ -663,7 +914,16 @@ private fun ProjectionScreen(
                                     drawRect(vertical)
                                 }
                             }
-                        },
+                        }) {
+                        OriginalPhotoTiles(photo, { zoom?.pose ?: PhotoZoomState() }, viewportInWindow,
+                            Modifier.fillMaxSize().semantics { contentDescription = "投影 ${photo.name}" },
+                            enabled = tilesEnabled, baseBitmap = loaded.bitmap.asAndroidBitmap())
+                    }
+                    else PunctumImage(
+                        model = remember(photo.uri, photo.thumbnailPath) {
+                            ImageRequest.Builder(context).data(PhotoStill.forList(photo)).size(720).crossfade(false).build()
+                        }, contentDescription = "投影 ${photo.name}", contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(), animateOnLoad = false,
                     )
                 }
             }
@@ -674,7 +934,7 @@ private fun ProjectionScreen(
             letterSpacing = .7.sp, textAlign = TextAlign.Center,
             modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp),
         )
-        if (photo != null) {
+        if (photo != null && showInformation) {
             val infoTop = if (infoVisible) {
                 (raised.top + raised.size.height + maxHeight.value - FILM_INFO_HEIGHT) / 2f
             } else maxHeight.value - FILM_INFO_HEIGHT
@@ -698,8 +958,8 @@ private fun ProjectionScreen(
                         color = Bone.copy(alpha = .5f), fontSize = 9.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 } else {
                     Spacer(Modifier.weight(1f))
-                    if (drag.y < -threshold || showUsageHint) Text(if (drag.y < -threshold) "松手加入待删除" else "左右滑动快切  ·  上滑加入待删除",
-                        color = if (drag.y < -threshold) Gold else Bone.copy(alpha = .28f), fontSize = 9.sp,
+                    if (showUsageHint) Text("左右滑动快切  ·  上滑加入待删除",
+                        color = Bone.copy(alpha = .28f), fontSize = 9.sp,
                         modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                 }
             }

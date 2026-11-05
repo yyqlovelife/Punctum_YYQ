@@ -101,6 +101,8 @@ internal fun GalleryScreen(
     onWarmThumbnails: (Int, Int) -> Unit,
     onPauseThumbnails: () -> Unit,
     onContentReady: () -> Unit,
+    onWarmDetailImages: (Int, Int) -> Unit = { _, _ -> },
+    onPauseDetailImages: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val sortFade = remember(gallery.uri) { Animatable(1f) }
@@ -146,6 +148,24 @@ internal fun GalleryScreen(
         } finally {
             onPauseThumbnails()
         }
+    }
+
+    // Detail warming is separate from the thumbnail worker; a moving list owns disk/CPU priority.
+    LaunchedEffect(gallery.uri, listState) {
+        try {
+            snapshotFlow {
+                if (listState.isScrollInProgress) null
+                else listState.layoutInfo.visibleItemsInfo.map { it.index } to latestPhotos.size
+            }.distinctUntilChanged().collectLatest { viewport ->
+                onPauseDetailImages()
+                val rows = viewport?.first.orEmpty().filter { it > 0 }
+                if (rows.isNotEmpty() && latestPhotos.isNotEmpty()) {
+                    delay(120)
+                    onWarmDetailImages((rows.min() - 1) * 2,
+                        ((rows.max() - 1) * 2 + 1).coerceAtMost(latestPhotos.lastIndex))
+                }
+            }
+        } finally { onPauseDetailImages() }
     }
 
     LazyColumn(

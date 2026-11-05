@@ -81,3 +81,13 @@ internal fun filmCompactTimeSpan(value: String): String {
         "${it.groupValues[1]}.${it.groupValues[2].padStart(2, '0')}"
     }.replace(Regex("\\s+[-–—]\\s+"), " — ")
 }
+
+internal enum class FilmProjectionAxis { UNDECIDED, HORIZONTAL, UPWARD, IGNORED }
+
+/** Lock one intent for the whole gesture; downward and diagonal motion cannot delete. */
+internal fun filmProjectionAxis(dx: Float, dy: Float, slop: Float): FilmProjectionAxis = when {
+    maxOf(abs(dx), abs(dy)) <= slop -> FilmProjectionAxis.UNDECIDED
+    abs(dx) > abs(dy) * 1.2f -> FilmProjectionAxis.HORIZONTAL
+    abs(dy) > abs(dx) * 1.2f -> if (dy < 0f) FilmProjectionAxis.UPWARD else FilmProjectionAxis.IGNORED
+    else -> FilmProjectionAxis.UNDECIDED
+}

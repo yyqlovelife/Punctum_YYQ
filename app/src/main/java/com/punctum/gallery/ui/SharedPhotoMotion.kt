@@ -119,7 +119,7 @@ internal fun photoMotionBitmap(context: Context, photo: Photo, detail: Boolean):
         photo.thumbnailPath?.let { "gallery-hq-thumb-fit-v1:${photo.uri}:$it" },
         "gallery-system-thumb-fit-v3:${photo.uri}:${photo.modifiedMillis}",
     )
-    val keys = if (detail) listOf("detail:${photo.uri}") + listKeys else listKeys
+    val keys = if (detail) listOf(com.punctum.gallery.data.DetailImagePipeline.cacheKey(context, photo), "detail:${photo.uri}") + listKeys else listKeys
     return keys.firstNotNullOfOrNull { context.imageLoader.memoryCache?.get(MemoryCache.Key(it))?.bitmap }
 }
 

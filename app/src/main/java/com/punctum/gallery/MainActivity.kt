@@ -550,6 +550,8 @@ private fun PunctumApp(vm: GalleryViewModel) {
                         onDeletePhoto = vm::deletePhoto,
                         onWarmThumbnails = vm::warmGalleryThumbnails,
                         onPauseThumbnails = vm::pauseGalleryThumbnails,
+                        onWarmDetailImages = vm::warmVisibleDetailImages,
+                        onPauseDetailImages = vm::pauseVisibleDetailImages,
                         onContentReady = {
                             if (vm.currentUri == currentKey) readyGalleryKey = currentKey
                         },
