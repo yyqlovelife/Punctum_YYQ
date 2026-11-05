@@ -2,11 +2,11 @@
 
 ## 当前结论 · 2026-11-05
 
-用户已验收 **Android 0.7.0/90 原图高清与快速切图体验**，明确要求升一个补丁版本并同步 GitHub。本轮发布目标为 **Android 0.7.1/91**，只升号、保留验收效果；iOS 维持 **0.5.10/60**。
+用户已验收 **Android 0.7.0/90 原图高清与快速切图体验**，明确要求升一个补丁版本并同步 GitHub。本轮已发布 **Android 0.7.1/91**，只升号、保留验收效果；iOS 维持 **0.5.10/60**。
 
-/91 已完成 Release、Lint（0 错误、17 条既有警告）、78 项单元测试与签名。正式包 `APK/Punctum-0.7.1-91.apk` 及同内容别名 `APK/Punctum-0.7.1-release.apk` 为 40,227,232 字节，SHA256 `3bf363a530f543ac15387e7dd48ac6594172ff5a510438b588b3fdccc6a8d974`。与已验收 /90 逐项 ZIP 比较仅 AndroidManifest.xml 变化，全部 DEX、资源和素材一致。GitHub 提交/标签/Release 附件仍待发布核验，不能据此声称已安装 /91 或已更新 Google Drive。最新执行入口为 [11 月 5 日交接](SESSION_HANDOFF_2026-11-05.md)，发布结果集中写入 [本次发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)。
+/91 已完成 Release、Lint（0 错误、17 条既有警告）、78 项单元测试与签名。正式包 `APK/Punctum-0.7.1-91.apk` 及同内容别名 `APK/Punctum-0.7.1-release.apk` 为 40,227,232 字节，SHA256 `3bf363a530f543ac15387e7dd48ac6594172ff5a510438b588b3fdccc6a8d974`。与已验收 /90 逐项 ZIP 比较仅 AndroidManifest.xml 变化，全部 DEX、资源和素材一致。GitHub 源码提交 `2941510`、独立标签及 Release 已发布并核对，256 个文件完整树一致。签名 APK 已在本地生成；附件上传遇到本机网络写入错误（Permission denied / EACCES），当前 Release 无 APK 附件。本轮未安装 /91，未更新 Google Drive。最新执行入口为 [11 月 5 日交接](SESSION_HANDOFF_2026-11-05.md)，发布结果集中写入 [本次发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)。
 
-[0.7.1 Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1) · [签名 APK](https://github.com/yyqlovelife/Punctum_YYQ/releases/download/android-v0.7.1/Punctum-0.7.1-91.apk)：入口已确定，待远端发布核验。签名证书 SHA256 为 `413b0241791e433edb2257e84bc7304b4669b48002fdfc1ec24eee1a08657daf`。
+[0.7.1 Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1) · [源码提交](https://github.com/yyqlovelife/Punctum_YYQ/commit/294151056027aecdaa1e3a1b42f6f8c59ef8a9af)。签名证书 SHA256 为 `413b0241791e433edb2257e84bc7304b4669b48002fdfc1ec24eee1a08657daf`。
 
 ### 已完成的 /90 验收与交付
 
@@ -25,7 +25,7 @@
 
 ### 发布与接续规则
 
-实际实现目录为 `/Users/80400763/Documents/Punctum`。这次不启动 L3、不改 iOS，不重做已验收 UI。GitHub 源码主线、`android-v0.7.1` 标签与带签名 APK 的 Release 由本轮发布核验后确认；旧 `android-v0.7.0` 标签继续指向 /77。APK 作为 Release 附件交付，不进入 git 树；用户媒体、原始设备日志、签名及本机配置保持忽略。
+实际实现目录为 `/Users/80400763/Documents/Punctum`。这次不启动 L3、不改 iOS，不重做已验收 UI。GitHub 源码主线、`android-v0.7.1` 标签与 Release 均已核对；旧 `android-v0.7.0` 标签继续指向 /77。APK 附件上传失败，正式包保留本机，不进入 git 树；用户媒体、原始设备日志、签名及本机配置保持忽略。
 
 本轮不更新 Google Drive，也未安排 /91 手机安装。11 月 3–5 日早先的“待装机、USB 断开、待清理”均为阶段历史；以本节及当前发布核验为准。
 

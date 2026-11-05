@@ -12,10 +12,10 @@ Punctum 直接映射设备里的系统图集，让照片以摄影画册与展览
 
 | 平台 | 版本 / 构建号 | 状态 |
 |---|---|---|
-| Android | **0.7.1 / 91** | 原图高清与快速切图体验已获用户验收；本次仅升号，正式构建与签名通过；GitHub 待发布核验 |
+| Android | **0.7.1 / 91** | 原图高清与快速切图体验已获用户验收；本次仅升号，正式构建与签名通过；源码、标签及 Release 已发布并核对 |
 | iOS | **0.5.10 / 60** | 保持原版本，本轮未改源码或重新构建 |
 
-**GitHub 待发布核验**：[0.7.1 Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1) · [签名 APK](https://github.com/yyqlovelife/Punctum_YYQ/releases/download/android-v0.7.1/Punctum-0.7.1-91.apk)。正式包已构建并验签；以上入口待远端发布后核验，APK 不进入源码树。新标签使用 `android-v0.7.1`；原 `android-v0.7.0` 标签继续保留 Android /77 锁版。
+**[0.7.1 发布页](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1)**：源码与独立标签已发布，256 个文件完整树与本地逐项一致。签名 APK 已在本地生成；附件上传遇到本机网络写入错误（Permission denied / EACCES），当前 Release 无 APK 附件。正式包为本机 `APK/Punctum-0.7.1-91.apk`，不进入源码树。原 `android-v0.7.0` 标签继续保留 Android /77 锁版。
 
 本次验收基于已安装诺贝尔手机的 **0.7.0/90 原图优化包**；临时测试媒体和画廊已清理。该包已通过 Google Drive 下载读回核对：[已验收 /90 历史下载](https://drive.google.com/file/d/184c7vu9ZlQlRyfNrYFIBf_jT-bzh-2GC/view?usp=drivesdk)。本轮仅发布 GitHub，未安排 /91 手机安装或更新 Google Drive。
 

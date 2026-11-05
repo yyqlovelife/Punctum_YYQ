@@ -2,11 +2,11 @@
 
 ## 当前结论
 
-用户已验收 **0.7.0/90 原图高清与快速切图体验**，要求上传 GitHub，并增加 0.0.1 版本。本轮目标为 **Android 0.7.1/91**，仅升号、不改验收效果。iOS 保持 0.5.10/60。
+用户已验收 **0.7.0/90 原图高清与快速切图体验**，要求上传 GitHub，并增加 0.0.1 版本。本轮已发布 **Android 0.7.1/91**，仅升号、不改验收效果。iOS 保持 0.5.10/60。
 
-/91 正式构建、78 项单元测试、Lint（0 错误、17 条既有警告）及签名已通过。`APK/Punctum-0.7.1-91.apk` 与 `APK/Punctum-0.7.1-release.apk` 同为 40,227,232 字节，SHA256 `3bf363a530f543ac15387e7dd48ac6594172ff5a510438b588b3fdccc6a8d974`；签名证书 SHA256 `413b0241791e433edb2257e84bc7304b4669b48002fdfc1ec24eee1a08657daf`。对比已验收 /90，仅 AndroidManifest.xml 改动，DEX、资源和素材全部一致。GitHub 提交、`android-v0.7.1` 标签和 Release 附件仍待发布核验。当前没有 /91 手机安装或 Google Drive 更新结论。见 [本次发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)。
+/91 正式构建、78 项单元测试、Lint（0 错误、17 条既有警告）及签名已通过。`APK/Punctum-0.7.1-91.apk` 与 `APK/Punctum-0.7.1-release.apk` 同为 40,227,232 字节，SHA256 `3bf363a530f543ac15387e7dd48ac6594172ff5a510438b588b3fdccc6a8d974`；签名证书 SHA256 `413b0241791e433edb2257e84bc7304b4669b48002fdfc1ec24eee1a08657daf`。对比已验收 /90，仅 AndroidManifest.xml 改动，DEX、资源和素材全部一致。GitHub 源码提交 `2941510`、`android-v0.7.1` 标签和 Release 已发布并核对，256 个文件完整树一致。签名 APK 已在本地生成；附件上传遇到本机网络写入错误（Permission denied / EACCES），当前 Release 无 APK 附件。本轮未安装 /91、未更新 Google Drive。见 [本次发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)。
 
-[0.7.1 Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1) · [签名 APK](https://github.com/yyqlovelife/Punctum_YYQ/releases/download/android-v0.7.1/Punctum-0.7.1-91.apk)为计划发布入口，远端尚待核验。
+[0.7.1 Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1) · [源码提交](https://github.com/yyqlovelife/Punctum_YYQ/commit/294151056027aecdaa1e3a1b42f6f8c59ef8a9af)。
 
 ## 已验收 /90 的最终状态
 
@@ -35,7 +35,7 @@
 
 ## 发布接续
 
-真实仓库为 `/Users/80400763/Documents/Punctum`。保留现有工作，不启动 L3，不改 iOS，不移动指向 /77 的 `android-v0.7.0` 标签。0.7.1 使用新标签及 GitHub Release，签名 APK 仅作为 Release 附件。
+真实仓库为 `/Users/80400763/Documents/Punctum`。保留现有工作，不启动 L3，不改 iOS，不移动指向 /77 的 `android-v0.7.0` 标签。0.7.1 使用新标签及 GitHub Release；APK 上传失败，正式包保留本机。
 
 本轮 /91 验证与远端发布结果集中更新 [发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)，并核验 README 的 Release 与 APK 下载入口。无需再次执行临时媒体清理，也无需安装 /91 或更新 Google Drive。
 

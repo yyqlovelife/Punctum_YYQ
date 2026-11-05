@@ -4,7 +4,7 @@
 
 用户已明确验收 0.7.0/90 的原图高清与快速切图体验，并要求增加 0.0.1、同步 GitHub。本轮 Android 升为 **0.7.1/91**，保持已验收实现；iOS 继续 **0.5.10/60**，未重新构建。
 
-**本地构建与签名已通过，GitHub 待发布核验。** 不得将 /90 的安装与测试直接写成 /91 装机结论。
+**本地构建与签名通过，GitHub 源码、标签和 Release 已发布并读回核对；APK 附件上传失败，保留本地正式包。** 不得将 /90 的安装与测试直接写成 /91 装机结论。
 
 | 项目 | 当前结果 |
 |---|---|
@@ -15,11 +15,11 @@
 | 正式包 | `APK/Punctum-0.7.1-91.apk`；同内容别名 `APK/Punctum-0.7.1-release.apk` |
 | 字节数 / SHA256 | 40,227,232 字节；`3bf363a530f543ac15387e7dd48ac6594172ff5a510438b588b3fdccc6a8d974` |
 | 签名核验 | 通过；证书 SHA256 `413b0241791e433edb2257e84bc7304b4669b48002fdfc1ec24eee1a08657daf` |
-| 源码提交 / 文档提交 | 待补实际 commit 链接 |
-| GitHub main 远端核对 | 待补 |
-| 新标签 `android-v0.7.1` | 待补实际目标及远端核对 |
-| GitHub Release / 下载入口 | [Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1) · [APK](https://github.com/yyqlovelife/Punctum_YYQ/releases/download/android-v0.7.1/Punctum-0.7.1-91.apk)，待发布核验 |
-| Release APK 读回 | 待补附件大小、SHA256 与本地一致性 |
+| 源码提交 / 文档提交 | [源码 `2941510`](https://github.com/yyqlovelife/Punctum_YYQ/commit/294151056027aecdaa1e3a1b42f6f8c59ef8a9af)；本记录由后续文档提交补录发布实证 |
+| GitHub main 远端核对 | 源码提交及完整树 `08bf42b830da58a32575e93fb3471690fb67ad37`：256 个文件的路径、模式、类型、blob SHA 全部一致，未截断；后续文档提交再次核对 |
+| 新标签 `android-v0.7.1` | 读回目标 `294151056027aecdaa1e3a1b42f6f8c59ef8a9af`，与源码提交一致 |
+| GitHub Release / 下载入口 | [Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1)；id `435353646`，`draft=false`，发布于 `2026-11-05T15:12:42Z`；无 APK 下载附件 |
+| Release APK 读回 | 未上传成功，不存在附件读回结论；远端资产列表为空 |
 | 手机安装 | 本轮未安排 /91 安装；/90 已安装且用户验收 |
 | Google Drive | 本轮不更新；继续保留 /90 历史交付 |
 
@@ -40,10 +40,14 @@
 
 本次提交包括共享原图管线、原图分块、预取调度、胶片投影缩放及手势/颜色交接、幕布缓存、测试和说明。预模糊光影试验保持未接入最终 UI。首页纸纹、字体、固定布局与原灯光效果保留。
 
-GitHub `main` 同步源码和文档；签名 APK 仅上传 Release 附件。APK/IPA、用户媒体、原始设备截图日志、密钥、本机配置不进 git 树；公开文档不记录个人设备完整标识或个人图集名。
+GitHub `main` 同步源码和文档；签名 APK 保留本地，计划作为 Release 附件的上传未成功。APK/IPA、用户媒体、原始设备截图日志、密钥、本机配置不进 git 树；公开文档不记录个人设备完整标识或个人图集名。
 
 原 `android-v0.7.0` 标签继续保留 /77；0.7.1 使用独立新标签，不移动旧标签。此次不更新 Google Drive，不安排 /91 手机安装。
 
-## 最终发布回填
+## 最终发布核对
 
-发布完成后将本节替换为实际源码/文档提交、main 树核对、新标签、Release 与附件读回结果，并同步 README、总交接和本日交接中的“待补”状态。
+- 源码 `main` 和新标签目标均为 `294151056027aecdaa1e3a1b42f6f8c59ef8a9af`；源码完整树已逐项核对 256 个文件。
+- 独立 Release 已公开，目标提交一致；旧 `android-v0.7.0` 保持 `21673dadc91fd5f4653a82c9a0be230323f7cc1e`，未移动。
+- 本次本机 GitHub 连接器写入返回 403，改用已登录的 GitHub 账号经 Git Data API 完成源码提交与远端完整树核对。
+- APK 附件尝试经 gh、HTTP/1.1 和 HTTPS 流式发送，均在本机写入时返回 `Permission denied` / `EACCES`；未收到 GitHub 拒绝 JSON。失败 starter 已清理，Release 资产读回为空，不提供失效 APK 下载链接。
+- 正式 APK 及同内容别名保留本机；哈希和签名见表。/91 只修改 Manifest 版本信息，验收包的 DEX、资源和素材保持一致。
