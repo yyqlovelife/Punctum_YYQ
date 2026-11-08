@@ -157,6 +157,7 @@ internal fun SwitcherScreen(
     onSelect: (String) -> Unit,
     onAdd: () -> Unit,
     onToggleInvitationStyle: () -> Unit,
+    onShuffleSubtitle: () -> Unit,
     onRename: (Gallery) -> Unit,
     onMove: (Int, Int) -> Unit,
     onDelete: (Int) -> Unit,
@@ -239,7 +240,11 @@ internal fun SwitcherScreen(
             subtitle,
             style = MaterialTheme.typography.bodyMedium,
             color = Muted,
-            modifier = Modifier.padding(horizontal = 24.dp),
+            modifier = Modifier.padding(horizontal = 24.dp).punctumPressable(
+                pressedScale = 0.97f,
+                pressedOffsetY = 2.dp,
+                onClick = onShuffleSubtitle,
+            ),
         )
         Spacer(Modifier.height(26.dp))
 

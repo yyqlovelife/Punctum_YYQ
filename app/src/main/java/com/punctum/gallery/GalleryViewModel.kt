@@ -76,6 +76,11 @@ class GalleryViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var homeSubtitle by mutableStateOf(HOME_SUBTITLES.first())
         private set
+
+    fun shuffleHomeSubtitle() {
+        homeSubtitle = HOME_SUBTITLES.filterNot { it == homeSubtitle }.random()
+    }
+
     var pendingDeleteConfirmation by mutableStateOf<PendingIntent?>(null)
         private set
     var pendingListDeleteConfirmation by mutableStateOf<Photo?>(null)

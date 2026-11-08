@@ -240,6 +240,7 @@ internal fun FilmReviewScreen(
             BitmapFactory.decodeResource(context.resources, R.drawable.film120_digits))
     }
     var lampOn by remember(gallery.uri) { mutableStateOf(false) }
+    val filmTableEnabled = lampOn && !loading && !sorting && !deleting
     val lampTime = remember(gallery.uri) { Animatable(0f) }
     val lamp = remember(lampTimeline, lampTime) { derivedStateOf { lampTimeline.frameAt(lampTime.value) } }
     LaunchedEffect(gallery.uri, lampOn) {
@@ -288,7 +289,7 @@ internal fun FilmReviewScreen(
     }
 
     fun select(photo: Photo, project: Boolean) {
-        if (project && projectionBusy) return
+        if (project && (!filmTableEnabled || projectionBusy)) return
         val replay = displayedID == photo.uri.toString()
         val animate = project && ValueAnimator.areAnimatorsEnabled()
         revealJob?.cancel()
@@ -420,7 +421,7 @@ internal fun FilmReviewScreen(
                         } else HorizontalPager(
                             state = pager,
                             modifier = Modifier.fillMaxSize(),
-                            userScrollEnabled = !sorting && !deleting,
+                            userScrollEnabled = filmTableEnabled,
                             flingBehavior = PagerDefaults.flingBehavior(state = pager),
                             beyondViewportPageCount = 1,
                         ) { page ->
@@ -436,9 +437,9 @@ internal fun FilmReviewScreen(
                                                     art = film120Art,
                                                     number = photos.indexOfFirst { it.uri == photo.uri } + 1,
                                                     selected = photo.uri.toString() == selectedID,
-                                                    enabled = !pager.isScrollInProgress && !sorting && !deleting,
-                                                    onSelect = { if (!pager.isScrollInProgress) select(photo, true) },
-                                                    onDelete = { if (!pager.isScrollInProgress) onRequestListDelete(photo) },
+                                                    enabled = filmTableEnabled && !pager.isScrollInProgress,
+                                                    onSelect = { if (filmTableEnabled && !pager.isScrollInProgress) select(photo, true) },
+                                                    onDelete = { if (filmTableEnabled && !pager.isScrollInProgress) onRequestListDelete(photo) },
                                                     onReady = { readyIDs = readyIDs + photo.uri.toString() },
                                                 )
                                             }

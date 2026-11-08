@@ -8,18 +8,20 @@
 
 Punctum 直接映射设备里的系统图集，让照片以摄影画册与展览的方式被重新观看。保留作品原比例、拍摄时间、地点和影像参数，通过自然手势浏览、筛选与整理照片。
 
-## 当前版本 · 2026-11-05
+## 当前版本 · 2026-11-08
 
 | 平台 | 版本 / 构建号 | 状态 |
 |---|---|---|
-| Android | **0.7.1 / 91** | 原图高清与快速切图体验已获用户验收；本次仅升号，正式构建与签名通过；源码、标签及 Release 已发布并核对 |
+| Android | **0.7.1 / 91** | 首页名言单击彩蛋已获用户认可；本轮保持版本与构建号，GitHub 源码同步进行中 |
 | iOS | **0.5.10 / 60** | 保持原版本，本轮未改源码或重新构建 |
 
-**[0.7.1 发布页](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1)**：源码与独立标签已发布，256 个文件完整树与本地逐项一致。签名 APK 已在本地生成；附件上传遇到本机网络写入错误（Permission denied / EACCES），当前 Release 无 APK 附件。正式包为本机 `APK/Punctum-0.7.1-91.apk`，不进入源码树。原 `android-v0.7.0` 标签继续保留 Android /77 锁版。
+**[下载最新 Android APK](https://drive.google.com/file/d/1KzDPCjohrFJFWV9BkAQbmE8WWZ0A6O4o/view?usp=drivesdk)**：三个模式首页单击影像名言，文字下沉、回弹后随机换句，排除当前句；无背景框或 Ripple。包含此前选片台熄灯交互锁定：熄灯时禁止翻页、选片和长按，开灯后恢复。
 
-本次验收基于已安装诺贝尔手机的 **0.7.0/90 原图优化包**；临时测试媒体和画廊已清理。该包已通过 Google Drive 下载读回核对：[已验收 /90 历史下载](https://drive.google.com/file/d/184c7vu9ZlQlRyfNrYFIBf_jT-bzh-2GC/view?usp=drivesdk)。本轮仅发布 GitHub，未安排 /91 手机安装或更新 Google Drive。
+本次签名包为 **40,227,232 字节**，SHA256 `648754efb1f5737d657cf00979873bac364192d4b3aa26b569577b8962cbac3f`；Google Drive 已下载读回核对一致。用户已反馈效果很好；本轮验证来自模拟器，未进行实体手机测试。
 
-当前进度以[11 月 5 日交接](SESSION_HANDOFF_2026-11-05.md)和[发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)为准。
+本轮仅更新 GitHub 源码、文档和云端 APK 链接，**源码同步进行中**；不上传二进制，不改已有标签或 [0.7.1 Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1)。11 月 5 日原图体验发布作为历史保留。
+
+当前进度以[11 月 8 日交接](SESSION_HANDOFF_2026-11-08.md)为准；原图体验的历史发布记录见[11 月 5 日核验](docs/RELEASE_VALIDATION_2026-11-05.md)。
 
 ## 原图高清与快速切图
 
@@ -54,11 +56,11 @@ Punctum 直接映射设备里的系统图集，让照片以摄影画册与展览
 
 ## 验证与交付边界
 
-已验收 /90 完成 Release、Lint（0 错误、17 条既有警告）、78 项单元测试与签名核验。设备 APK、云端读回包和本地包 SHA256 一致；22 张临时测试媒体及临时画廊已清理，其他媒体保留。
+11 月 8 日完成三个模式模拟器累计 10 次换句、取消按压和关闭系统动画验证；78 项单元测试、Release、Lint（0 错误、17 条既有警告）及签名通过。云端 APK 下载读回 SHA256 与本地一致。用户认可本次效果，本轮未进行实体手机验证。详情见[最新交接](SESSION_HANDOFF_2026-11-08.md)。
 
-/91 的 Release、Lint（0 错误、17 条既有警告）、78 项单元测试与签名通过；与已验收 /90 逐项比较仅 AndroidManifest.xml 改动，DEX、资源和素材全部一致。正式包为 40,227,232 字节，SHA256 `3bf363a530f543ac15387e7dd48ac6594172ff5a510438b588b3fdccc6a8d974`。GitHub 源码、标签与 Release 已发布并核对；APK 附件上传失败，正式包保留本地，详见[发布核验记录](docs/RELEASE_VALIDATION_2026-11-05.md)。用户验收、设备安装和远端发布分别标注，不能互相替代。
+11 月 5 日原图高清与快速切图已在诺贝尔手机验证并获用户验收，临时媒体清理已完成；对应安装与测量仅适用于当日包。该次升号包及 GitHub 标签/Release 记录保留在[历史发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)，与本轮同为 0.7.1/91 的新包通过日期和 SHA256 区分。
 
-GitHub 保存源码、资源、测试、版本配置与文档。APK/IPA、签名资料、本机配置、用户照片和原始设备截图日志不进入源码树。
+GitHub 保存源码、资源、测试、版本配置与文档。APK/IPA、签名资料、本机配置、用户照片和原始设备截图日志不进入源码树。本轮源码同步尚在进行，旧标签与 Release 不变。
 
 ## 本地开发
 
@@ -76,7 +78,7 @@ iOS 工程位于 `iOS/Punctum`，最低 iOS 17，Bundle Identifier 为 `com.ches
 ## 文档入口
 
 - [更新索引](CHANGELOG.md) · [Android 日志](changelog/android.md) · [iOS 日志](changelog/ios.md)
-- [最新交接](SESSION_HANDOFF_2026-11-05.md) · [总交接与历史](PUNCTUM_HANDOFF.md) · [本次发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)
+- [最新交接](SESSION_HANDOFF_2026-11-08.md) · [总交接与历史](PUNCTUM_HANDOFF.md) · [11 月 5 日发布核验](docs/RELEASE_VALIDATION_2026-11-05.md)
 - [原图与快切验证](docs/ANDROID_ORIGINAL_DETAIL_VALIDATION_2026-11-05.md) · [投影缩放](docs/ANDROID_FILM_PROJECTION_ZOOM_VALIDATION_2026-11-04.md) · [性能与颜色](docs/ANDROID_FILM_PROJECTION_PERF_VALIDATION_2026-11-03.md)
 - [设计与交互](design-qa.md) · [日志维护规则](changelog/README.md) · [产品需求](PRD/PRD-Punctum观止.md)
 
