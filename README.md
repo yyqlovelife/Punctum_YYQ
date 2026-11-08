@@ -12,16 +12,16 @@ Punctum 直接映射设备里的系统图集，让照片以摄影画册与展览
 
 | 平台 | 版本 / 构建号 | 状态 |
 |---|---|---|
-| Android | **0.7.1 / 91** | 首页名言单击彩蛋已获用户认可；本轮保持版本与构建号，GitHub 源码同步进行中 |
+| Android | **0.7.1 / 91** | 首页名言单击彩蛋已获用户认可；本轮保持版本与构建号，GitHub 源码已同步并核对 |
 | iOS | **0.5.10 / 60** | 保持原版本，本轮未改源码或重新构建 |
 
 **[下载最新 Android APK](https://drive.google.com/file/d/1KzDPCjohrFJFWV9BkAQbmE8WWZ0A6O4o/view?usp=drivesdk)**：三个模式首页单击影像名言，文字下沉、回弹后随机换句，排除当前句；无背景框或 Ripple。包含此前选片台熄灯交互锁定：熄灯时禁止翻页、选片和长按，开灯后恢复。
 
 本次签名包为 **40,227,232 字节**，SHA256 `648754efb1f5737d657cf00979873bac364192d4b3aa26b569577b8962cbac3f`；Google Drive 已下载读回核对一致。用户已反馈效果很好；本轮验证来自模拟器，未进行实体手机测试。
 
-本轮仅更新 GitHub 源码、文档和云端 APK 链接，**源码同步进行中**；不上传二进制，不改已有标签或 [0.7.1 Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1)。11 月 5 日原图体验发布作为历史保留。
+本轮仅更新 GitHub 源码、文档和云端 APK 链接，**源码与文档已同步并核对**；不上传二进制，不改已有标签或 [0.7.1 Release](https://github.com/yyqlovelife/Punctum_YYQ/releases/tag/android-v0.7.1)。11 月 5 日原图体验发布作为历史保留。
 
-当前进度以[11 月 8 日交接](SESSION_HANDOFF_2026-11-08.md)为准；原图体验的历史发布记录见[11 月 5 日核验](docs/RELEASE_VALIDATION_2026-11-05.md)。
+源码提交 [`577c210`](https://github.com/yyqlovelife/Punctum_YYQ/commit/577c210737dd422e3a097cf10fe48c9920c0da72) 的 260 个文件完整树已逐项核对。当前进度以[11 月 8 日交接](SESSION_HANDOFF_2026-11-08.md)和[远端核验](docs/GITHUB_SYNC_VALIDATION_2026-11-08.md)为准；原图体验的历史发布记录见[11 月 5 日核验](docs/RELEASE_VALIDATION_2026-11-05.md)。
 
 ## 原图高清与快速切图
 

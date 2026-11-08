@@ -2,11 +2,11 @@
 
 ## 当前接续 · 2026-11-08
 
-三个模式首页单击影像名言，只让文字下沉、回弹后随机换一句；排除当前句，无背景框或 Ripple。用户已反馈效果很好，并授权上传 GitHub。**Android 0.7.1/91 严格保持，iOS 不变；本轮源码同步进行中，尚未形成上传完成结论。**
+三个模式首页单击影像名言，只让文字下沉、回弹后随机换一句；排除当前句，无背景框或 Ripple。用户已反馈效果很好，并授权上传 GitHub。**Android 0.7.1/91 严格保持，iOS 不变；本轮源码和文档已同步 GitHub 并读回核对。**
 
 本轮完成三模式模拟器累计 10 次换句、取消按压和关闭动画验证；78 项单元测试、Release、Lint（0 错误、17 条既有警告）及签名通过。**本次未进行实体手机验证**，用户认可与模拟器验证分别记录。包内保留此前熄灯时禁用翻页、选片与长按的修改。
 
-最新 [Google Drive APK](https://drive.google.com/file/d/1KzDPCjohrFJFWV9BkAQbmE8WWZ0A6O4o/view?usp=drivesdk) 已下载读回核对：40,227,232 字节，SHA256 `648754efb1f5737d657cf00979873bac364192d4b3aa26b569577b8962cbac3f`。当前入口为 [11 月 8 日交接](SESSION_HANDOFF_2026-11-08.md)。
+最新 [Google Drive APK](https://drive.google.com/file/d/1KzDPCjohrFJFWV9BkAQbmE8WWZ0A6O4o/view?usp=drivesdk) 已下载读回核对：40,227,232 字节，SHA256 `648754efb1f5737d657cf00979873bac364192d4b3aa26b569577b8962cbac3f`。源码提交 [`577c210`](https://github.com/yyqlovelife/Punctum_YYQ/commit/577c210737dd422e3a097cf10fe48c9920c0da72) 的 260 个文件完整树已逐项核对；当前入口为 [11 月 8 日交接](SESSION_HANDOFF_2026-11-08.md)和[同步核验](docs/GITHUB_SYNC_VALIDATION_2026-11-08.md)。
 
 本轮仅同步源码、文档和云端 APK 链接，不传二进制；已有 `android-v0.7.1`、`android-v0.7.0` 标签和 Release 保持原状。下方为按日期保留的历史，历史包使用各自 SHA256 区分，不能作为本次装机结论。
 

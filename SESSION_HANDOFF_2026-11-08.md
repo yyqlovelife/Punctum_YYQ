@@ -8,6 +8,6 @@ Android 保持 **0.7.1/91**；本次 APK 同时包含此前熄灯锁定看片台
 
 [Google Drive 下载](https://drive.google.com/file/d/1KzDPCjohrFJFWV9BkAQbmE8WWZ0A6O4o/view?usp=drivesdk)。详细实现与验证见 [名言彩蛋验证](docs/ANDROID_HOME_QUOTE_VALIDATION_2026-11-08.md)。
 
-用户已确认本轮效果并要求同步 GitHub，版本及构建号继续保持 0.7.1/91。此次一并同步 11 月 6 日熄灯锁定修改、名言彩蛋及相关记录；iOS 未改。实际交互验证范围仍为模拟器，未新增实体手机验收结论。远端同步结果见 [本次 GitHub 核验](docs/GITHUB_SYNC_VALIDATION_2026-11-08.md)。
+用户已确认本轮效果并要求同步 GitHub，版本及构建号继续保持 0.7.1/91。此次一并同步 11 月 6 日熄灯锁定修改、名言彩蛋及相关记录；iOS 未改。实际交互验证范围仍为模拟器，未新增实体手机验收结论。GitHub `main` 已同步源码提交 [`577c210`](https://github.com/yyqlovelife/Punctum_YYQ/commit/577c210737dd422e3a097cf10fe48c9920c0da72)，260 个文件完整树逐项一致；文档核验补录后再次核对最终 `main`。结果见 [本次 GitHub 核验](docs/GITHUB_SYNC_VALIDATION_2026-11-08.md)。
 
 旧 `android-v0.7.1` 标签和 Release 保留 11 月 5 日发布快照，不移动；最新 APK 使用上方已核对的 Google Drive 链接。历史发布见 [11 月 5 日](SESSION_HANDOFF_2026-11-05.md)，实体设备安装记录见 [11 月 6 日](SESSION_HANDOFF_2026-11-06.md)。
